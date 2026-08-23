@@ -12,3 +12,7 @@ Terminal records never return to active states. Regenerate, remix, extend, and r
 The production path is Browser → Worker API → PostgreSQL job → Cloudflare Queue → queue consumer → `GenerationOrchestrator` → configured provider/FastAPI → R2 assets → PostgreSQL immutable version. Queue delivery is at-least-once and orchestration completion is idempotent.
 
 The existing React interface continues to consume a primary master. Additional assets are represented without requiring a mixer UI.
+
+ACE-Step runs as an independently managed official service. The Dozi FastAPI gateway is the only component that knows its task API; browser and TypeScript orchestration continue to use provider-neutral requests and multi-asset results.
+
+Contextual-track generation extends the provider boundary with a typed optional operation while retaining `GenerationResult`. Lineage is explicit on the version-to-asset mapping through `sourceAssetId` and `generationMethod`; source asset, output asset, version, and generation job remain independently queryable.

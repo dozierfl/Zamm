@@ -6,6 +6,10 @@ export const audioAssetRoles=["MASTER","PREMASTER","NATIVE_TRACK","DERIVED_STEM"
 export type AudioAssetRole=(typeof audioAssetRoles)[number];
 export const generationProvenances=["GENERATED_NATIVE","SEPARATED","RENDERED","UPLOADED","REFERENCE","DERIVED"] as const;
 export type GenerationProvenance=(typeof generationProvenances)[number];
+export const trackGenerationMethods=["FULL_SONG","LEGO_CONTEXTUAL","EXTRACT","COMPLETE","SEPARATION","UPLOAD"] as const;
+export type TrackGenerationMethod=(typeof trackGenerationMethods)[number];
+export const contextualTrackTargets=["woodwinds","brass","fx","synth","strings","percussion","keyboard","guitar","bass","drums","backing_vocals","vocals"] as const;
+export type ContextualTrackTarget=(typeof contextualTrackTargets)[number];
 
 export const compositionPlanSchema=z.object({titleSuggestions:z.array(z.string()),genre:z.string(),subgenres:z.array(z.string()),mood:z.array(z.string()),bpm:z.number().int().min(40).max(220),key:z.string(),scale:z.string(),timeSignature:z.string(),durationSeconds:z.number().int().min(1).max(600),instrumentation:z.array(z.object({instrument:z.string(),instrumentGroup:z.string().optional(),role:z.string(),character:z.string()})),vocal:z.object({enabled:z.boolean(),role:z.string().optional(),tone:z.string(),delivery:z.string()}),structure:z.array(z.object({type:z.string(),bars:z.number().int().positive(),energy:z.number().min(0).max(1),description:z.string()})),generationCaption:z.string(),negativeInstructions:z.array(z.string())});
 export type CompositionPlan=z.infer<typeof compositionPlanSchema>;
@@ -18,6 +22,9 @@ export type GenerationRequest={jobId:string;userId:string;songId:string;versionI
 export type GeneratedAudio={bytes?:Uint8Array;sourceUrl?:string};
 export type GeneratedAsset={assetKey:string;role:AudioAssetRole;instrument?:string;instrumentGroup?:string;provenance:GenerationProvenance;isPrimary:boolean;sortOrder:number;audio:GeneratedAudio;metadata:{mimeType:string;codec:string;sampleRate:number;bitDepth:number;channels:number;durationSeconds:number;checksum?:string;waveformData?:number[]};providerMetadata?:Record<string,unknown>};
 export type GenerationResult={assets:GeneratedAsset[];providerMetadata?:Record<string,unknown>};
+export const contextualTrackGenerationSchema=z.object({sourceAssetId:z.string().uuid(),targetInstrumentGroup:z.enum(contextualTrackTargets),seed:z.number().int().nonnegative().optional(),providerOptions:z.record(z.string(),z.unknown()).optional()});
+export type ContextualTrackGenerationInput=z.infer<typeof contextualTrackGenerationSchema>;
+export type ContextualTrackGenerationRequest=ContextualTrackGenerationInput&{jobId:string;userId:string;songId:string;versionId:string;sourceAudio:Uint8Array;sourceMimeType:string;caption:string};
 export type ProviderHealth={available:boolean;latencyMs:number;message:string};
 export type ProviderCapabilities={textToMusic:boolean;lyrics:boolean;referenceAudio:boolean;continuation:boolean;repaint:boolean;stems:boolean;nativeMultitrack:boolean;bpmControl:boolean;keyControl:boolean;seed:boolean};
 

@@ -1,8 +1,7 @@
 {
   "name": "dozi-music-studio-local",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-08-23",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-05-22",
   "vars": { "MUSIC_PROVIDER": "mock" },
   "queues": {
     "producers": [{ "binding": "GENERATION_QUEUE", "queue": "dozi-generation" }],

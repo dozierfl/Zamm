@@ -17,3 +17,12 @@ Open `http://localhost:3000`, create a Dozi account, and generate a song. Local 
 5. Run `npm run dev`.
 
 Local/test queue execution is independent of status polling. Cloudflare environments use the bound `GENERATION_QUEUE`.
+
+## ACE-Step terminals
+
+1. PostgreSQL: `docker compose up -d postgres && npm run db:migrate`.
+2. Official ACE-Step clone: set `ACESTEP_LM_BACKEND=mlx`, `ACESTEP_INIT_LLM=false`, then run `uv run acestep-api --host 127.0.0.1 --port 8001`. Use a single server worker. First startup downloads official checkpoints.
+3. Gateway: `cd ai-service && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`.
+4. Dozi: set `MUSIC_PROVIDER=acestep` and run `npm run dev`.
+
+Mock remains the default and requires no ACE-Step installation.

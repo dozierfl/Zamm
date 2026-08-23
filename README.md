@@ -1,5 +1,7 @@
 # Dozi Music Studio
 
+Dozi supports an optional official ACE-Step 1.5 provider through its FastAPI AI gateway. Mock generation remains the default. See [ACE-Step capabilities](docs/ACESTEP_CAPABILITIES.md) and [local development](docs/LOCAL_DEVELOPMENT.md) for the verified service architecture and startup sequence.
+
 An original, server-backed generative-music creator workspace. The vertical MVP includes app-owned accounts, beginner and advanced creation modes, a deterministic composition planner, durable jobs, immutable version records, generated WAV masters, private range-capable playback, and a searchable library.
 
 ## Run and verify

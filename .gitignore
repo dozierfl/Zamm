@@ -38,6 +38,7 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/artifacts/acestep-lego/
 ai-service/.venv/
 __pycache__/
 .pytest_cache/
