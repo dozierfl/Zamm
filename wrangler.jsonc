@@ -3,13 +3,10 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-08-23",
   "compatibility_flags": ["nodejs_compat"],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "site-creator-d1",
-      "database_id": "00000000-0000-4000-8000-000000000000",
-      "migrations_dir": "drizzle"
-    }
-  ],
+  "vars": { "MUSIC_PROVIDER": "mock" },
+  "queues": {
+    "producers": [{ "binding": "GENERATION_QUEUE", "queue": "dozi-generation" }],
+    "consumers": [{ "queue": "dozi-generation", "max_batch_size": 1, "max_retries": 3 }]
+  },
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "site-creator-r2" }]
 }

@@ -38,3 +38,7 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+ai-service/.venv/
+__pycache__/
+.pytest_cache/
+*.tsbuildinfo

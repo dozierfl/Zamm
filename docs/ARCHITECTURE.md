@@ -7,3 +7,8 @@ The boundary is normalized around songs, immutable versions, generation jobs, co
 `QUEUED → PREPARING → GENERATING → POST_PROCESSING → UPLOADING → COMPLETE`
 
 Terminal records never return to active states. Regenerate, remix, extend, and repaint create children rather than overwriting versions.
+# Architecture foundation migration
+
+The production path is Browser → Worker API → PostgreSQL job → Cloudflare Queue → queue consumer → `GenerationOrchestrator` → configured provider/FastAPI → R2 assets → PostgreSQL immutable version. Queue delivery is at-least-once and orchestration completion is idempotent.
+
+The existing React interface continues to consume a primary master. Additional assets are represented without requiring a mixer UI.

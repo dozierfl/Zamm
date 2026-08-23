@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dozi
+      POSTGRES_USER: dozi
+      POSTGRES_PASSWORD: dozi_local_only
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dozi"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes: ["dozi-postgres:/var/lib/postgresql/data"]
+volumes:
+  dozi-postgres:

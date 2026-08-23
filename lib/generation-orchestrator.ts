@@ -1,0 +1,39 @@
+import type postgres from "postgres";
+import type { CompositionPlan, CreateGeneration, GeneratedAsset, GenerationRequest, GenerationStatus } from "./domain";
+import type { MusicGenerationProvider } from "./provider-types";
+import type { AudioStorage } from "./audio-storage";
+import { isTerminal } from "./generation-state";
+import { storageKey } from "./audio-storage";
+
+type Sql=ReturnType<typeof postgres>;
+type Job={id:string;versionId:string;userId:string;songId:string;parentVersionId:string|null;reservedVersionNumber:number;provider:string;providerModel:string;status:GenerationStatus;requestPayload:CreateGeneration;compositionPlan:CompositionPlan;seed:number};
+
+export class GenerationOrchestrator{
+  constructor(private readonly sql:Sql,private readonly storage:AudioStorage,private readonly providerFor:(name:string)=>MusicGenerationProvider){}
+  async process(jobId:string){
+    const rows=await this.sql<Job[]>`update generation_jobs set status='PREPARING',progress=15,attempt_count=attempt_count+1,last_attempt_at=now(),started_at=coalesce(started_at,now()),updated_at=now() where id=${jobId} and status in ('QUEUED','FAILED') and cancellation_requested_at is null and attempt_count<max_attempts returning id,version_id as "versionId",user_id as "userId",song_id as "songId",parent_version_id as "parentVersionId",reserved_version_number as "reservedVersionNumber",provider,provider_model as "providerModel",status,request_payload as "requestPayload",composition_plan as "compositionPlan",seed`;
+    if(!rows[0]){const existing=await this.sql<{status:GenerationStatus}[]>`select status from generation_jobs where id=${jobId}`;if(existing[0]&&isTerminal(existing[0].status))return;throw new Error("JOB_NOT_CLAIMABLE")}
+    const job=rows[0],uploaded:string[]=[];
+    try{
+      await this.transition(job.id,"GENERATING",45);
+      const request:GenerationRequest={jobId:job.id,userId:job.userId,songId:job.songId,versionId:job.versionId,compositionPlan:job.compositionPlan,lyrics:job.requestPayload.lyrics,seed:job.seed,outputMode:job.requestPayload.outputMode};
+      const result=await this.providerFor(job.provider).generate(request);this.validate(result.assets);
+      await this.transition(job.id,"POST_PROCESSING",70);await this.transition(job.id,"UPLOADING",85);
+      const assets=[] as Array<{asset:GeneratedAsset;id:string;key:string;bytes:Uint8Array;checksum:string}>;
+      for(const asset of result.assets){const bytes=asset.audio.bytes;if(!bytes)throw new Error("UNSUPPORTED_AUDIO_TRANSPORT");const id=await stableUuid(`${job.id}:${asset.assetKey}`),checksum=asset.metadata.checksum||await sha256(bytes),key=storageKey(job.userId,job.songId,job.versionId,asset.role,id);await this.storage.put(key,bytes,{contentType:asset.metadata.mimeType,customMetadata:{ownerId:job.userId,jobId:job.id,checksum,role:asset.role}});uploaded.push(key);assets.push({asset,id,key,bytes,checksum})}
+      await this.sql.begin(async tx=>{
+        const current=await tx<{status:GenerationStatus;cancelled:Date|null}[]>`select status,cancellation_requested_at as cancelled from generation_jobs where id=${job.id} for update`;if(current[0]?.cancelled||current[0]?.status==="CANCELLED")throw new Error("GENERATION_CANCELLED");
+        for(const item of assets)await tx`insert into audio_assets(id,owner_id,generation_job_id,storage_key,mime_type,codec,sample_rate,bit_depth,channels,duration_seconds,file_size,checksum,waveform_data,analysis_metadata) values(${item.id},${job.userId},${job.id},${item.key},${item.asset.metadata.mimeType},${item.asset.metadata.codec},${item.asset.metadata.sampleRate},${item.asset.metadata.bitDepth},${item.asset.metadata.channels},${item.asset.metadata.durationSeconds},${item.bytes.byteLength},${item.checksum},${tx.json(item.asset.metadata.waveformData||[])},${tx.json(JSON.parse(JSON.stringify(item.asset.providerMetadata||{})))}) on conflict (id) do nothing`;
+        const master=assets.find(x=>x.asset.role==="MASTER"&&x.asset.isPrimary);if(!master)throw new Error("MASTER_ASSET_REQUIRED");
+        await tx`insert into song_versions(id,song_id,parent_version_id,generation_job_id,version_number,audio_asset_id,duration_seconds,bpm,musical_key,scale,lyrics,prompt,style_prompt,composition_plan,provider,provider_model,provider_metadata,seed) values(${job.versionId},${job.songId},${job.parentVersionId},${job.id},${job.reservedVersionNumber},${master.id},${master.asset.metadata.durationSeconds},${job.compositionPlan.bpm},${job.compositionPlan.key},${job.compositionPlan.scale},${job.requestPayload.lyrics||""},${job.requestPayload.prompt},${job.compositionPlan.generationCaption},${tx.json(JSON.parse(JSON.stringify(job.compositionPlan)))},${job.provider},${job.providerModel},${tx.json(JSON.parse(JSON.stringify(result.providerMetadata||{})))},${job.seed}) on conflict (generation_job_id) do nothing`;
+        for(const item of assets)await tx`insert into version_assets(id,song_version_id,audio_asset_id,role,instrument,instrument_group,source_type,sort_order,is_primary,source_end_seconds,metadata) values(${await stableUuid(`${job.versionId}:${item.id}`)},${job.versionId},${item.id},${item.asset.role},${item.asset.instrument||null},${item.asset.instrumentGroup||null},${item.asset.provenance},${item.asset.sortOrder},${item.asset.isPrimary},${item.asset.metadata.durationSeconds},${tx.json(JSON.parse(JSON.stringify(item.asset.providerMetadata||{})))}) on conflict (song_version_id,audio_asset_id) do nothing`;
+        await tx`update generation_jobs set status='COMPLETE',progress=100,completed_at=now(),updated_at=now(),error_code=null,error_message=null,error_retryable=null where id=${job.id} and status='UPLOADING' and cancellation_requested_at is null`;
+      });
+    }catch(error){const cancelled=error instanceof Error&&error.message==="GENERATION_CANCELLED",retryable=!cancelled&&this.retryable(error);await this.sql`update generation_jobs set status=${cancelled?"CANCELLED":"FAILED"},progress=case when ${cancelled} then progress else 0 end,error_code=${cancelled?"CANCELLED":error instanceof Error?error.message:"GENERATION_FAILED"},error_message=${error instanceof Error?error.message:"Generation failed"},error_retryable=${retryable},next_retry_at=${retryable?new Date(Date.now()+30000):null},updated_at=now() where id=${job.id} and status!='COMPLETE'`;if(cancelled)await Promise.all(uploaded.map(key=>this.storage.delete(key)));throw error}
+  }
+  private async transition(id:string,status:GenerationStatus,progress:number){const rows=await this.sql`update generation_jobs set status=${status},progress=${progress},updated_at=now() where id=${id} and status not in ('COMPLETE','CANCELLED') and cancellation_requested_at is null returning id`;if(!rows[0])throw new Error("GENERATION_CANCELLED")}
+  private validate(assets:GeneratedAsset[]){if(!assets.length)throw new Error("EMPTY_GENERATION_RESULT");if(!assets.some(a=>a.role==="MASTER"&&a.isPrimary))throw new Error("MASTER_ASSET_REQUIRED");const duration=assets[0].metadata.durationSeconds;if(assets.some(a=>Math.abs(a.metadata.durationSeconds-duration)>.001))throw new Error("ASSETS_NOT_TIME_ALIGNED")}
+  private retryable(error:unknown){const m=error instanceof Error?error.message:"";return !["MASTER_ASSET_REQUIRED","EMPTY_GENERATION_RESULT","ASSETS_NOT_TIME_ALIGNED","UNSUPPORTED_AUDIO_TRANSPORT","GENERATION_PROVIDER_UNAVAILABLE"].includes(m)}
+}
+async function sha256(bytes:Uint8Array){const copy=new Uint8Array(bytes);return[...new Uint8Array(await crypto.subtle.digest("SHA-256",copy.buffer))].map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function stableUuid(value:string){const b=new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const s=[...b].map(x=>x.toString(16).padStart(2,"0")).join("");return`${s.slice(0,8)}-${s.slice(8,12)}-${s.slice(12,16)}-${s.slice(16,20)}-${s.slice(20)}`}

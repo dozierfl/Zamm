@@ -1,10 +1,18 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { getSql } from "../db";
+import { R2AudioStorage } from "../lib/audio-storage";
+import { GenerationOrchestrator } from "../lib/generation-orchestrator";
+import { createProvider } from "../lib/providers";
 
 interface Env {
   ASSETS: Fetcher;
-  DB: D1Database;
+  DATABASE_URL: string;
+  MUSIC_PROVIDER?: string;
+  AI_SERVICE_BASE_URL?: string;
+  AI_SERVICE_TOKEN?: string;
+  GENERATION_QUEUE: Queue<{ generationJobId: string }>;
   AUDIO: R2Bucket;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -43,6 +51,7 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
+  async queue(batch:MessageBatch<{generationJobId:string}>,env:Env):Promise<void>{const orchestrator=new GenerationOrchestrator(getSql(env.DATABASE_URL),new R2AudioStorage(env.AUDIO),name=>createProvider(name,{aiServiceBaseUrl:env.AI_SERVICE_BASE_URL,aiServiceToken:env.AI_SERVICE_TOKEN}));for(const message of batch.messages){try{await orchestrator.process(message.body.generationJobId);message.ack()}catch(error){const retryable=error instanceof Error&&!error.message.includes("MASTER_ASSET_REQUIRED")&&!error.message.includes("PROVIDER_UNAVAILABLE");if(retryable)message.retry();else message.ack()}}},
 };
 
 export default worker;

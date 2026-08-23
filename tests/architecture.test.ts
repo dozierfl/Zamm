@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { compose } from "../lib/domain.ts";
+import { MockMusicProvider } from "../lib/providers.ts";
+import { InlineTestGenerationQueue } from "../lib/generation-queue.ts";
+test("generation status GET is observational only",async()=>{const source=await readFile(new URL("../app/api/generations/[id]/route.ts",import.meta.url),"utf8");assert.doesNotMatch(source,/\.generate\(|orchestrator\.process|\.put\(/);assert.match(source,/select j\.id/)});
+test("local queue executes without any status read",async()=>{let delivered="";const queue=new InlineTestGenerationQueue(async id=>{delivered=id});await queue.enqueue("job-1");await new Promise(resolve=>setTimeout(resolve,0));assert.equal(delivered,"job-1")});
+test("mock provider supports one aligned master and six aligned assets",async()=>{const input={prompt:"warm reflective soul performance",durationSeconds:1,outputMode:"MULTI_ASSET" as const,lyrics:"",instrumental:false},plan=compose(input),provider=new MockMusicProvider(),base={jobId:"j",userId:"u",songId:"s",versionId:"v",compositionPlan:plan,seed:42};const multi=await provider.generate({...base,outputMode:"MULTI_ASSET"});assert.equal(multi.assets.length,6);assert.equal(multi.assets.filter(a=>a.role==="MASTER"&&a.isPrimary).length,1);assert.ok(multi.assets.every(a=>a.metadata.durationSeconds===1));const single=await provider.generate({...base,outputMode:"MASTER_ONLY"});assert.deepEqual(single.assets.map(a=>a.role),["MASTER"])});
+test("PostgreSQL schema encodes idempotency and normalized assets",async()=>{const migration=await readFile(new URL("../drizzle-pg/0000_condemned_silhouette.sql",import.meta.url),"utf8");assert.match(migration,/CREATE TABLE "version_assets"/);assert.match(migration,/jobs_user_idempotency_unique/);assert.match(migration,/versions_job_unique/);assert.match(migration,/parent_version_id/)});

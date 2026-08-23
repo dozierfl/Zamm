@@ -8,3 +8,12 @@ npm run dev
 ```
 
 Open `http://localhost:3000`, create a Dozi account, and generate a song. Local D1 and R2 state lives under `.wrangler` and is ignored by source control.
+# Local architecture services
+
+1. Copy `.env.example` to `.env.local`.
+2. Run `docker compose up -d postgres`.
+3. Run `npm run db:migrate`.
+4. Start FastAPI using the command in `PROVIDER_INTEGRATION.md` when testing `MUSIC_PROVIDER=ai-service`.
+5. Run `npm run dev`.
+
+Local/test queue execution is independent of status polling. Cloudflare environments use the bound `GENERATION_QUEUE`.
