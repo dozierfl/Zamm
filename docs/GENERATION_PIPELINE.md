@@ -8,4 +8,4 @@
 6. Inspect and store the master outside the relational database.
 7. Create an immutable SongVersion and downsampled waveform.
 
-The bundled mock simulates every stage and deterministic oscillator playback. It never blocks on an external model.
+The bundled mock generates a deterministic 16-bit PCM WAV, SHA-256 checksum, and 96-point waveform. The master is written to R2 before asset/version metadata is committed. Duplicate processing is safe because job-to-asset and job-to-version relationships are unique.

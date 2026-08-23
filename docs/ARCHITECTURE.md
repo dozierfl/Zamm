@@ -1,8 +1,8 @@
 # Architecture
 
-The MVP is a Vinext/React application compiled for Cloudflare Workers. `StudioApp` owns the interactive vertical slice: creator controls, deterministic Song Blueprint, generation state machine, version cards, library, and one global player.
+The MVP is a Vinext/React application compiled for Cloudflare Workers. `StudioApp` owns the interactive surface while route handlers enforce identity, ownership, validation, and job transitions. D1 stores accounts, sessions, songs, jobs, assets, and immutable versions. R2 stores WAV masters.
 
-The boundary is normalized around songs, immutable versions, generation jobs, composition plans, and provider capabilities. The mock currently runs client-side to keep deployment credential-free. A production increment should move jobs to a durable queue, metadata to D1/PostgreSQL, and audio to R2/S3 while preserving this contract.
+The boundary is normalized around songs, immutable versions, generation jobs, composition plans, and provider capabilities. The deterministic provider runs server-side. Active jobs are durable and resumable: authenticated polling advances the orchestrator and an idempotent completion transaction prevents duplicate versions. A dedicated queue consumer can later replace this trigger without changing the API contract.
 
 `QUEUED → PREPARING → GENERATING → POST_PROCESSING → UPLOADING → COMPLETE`
 
