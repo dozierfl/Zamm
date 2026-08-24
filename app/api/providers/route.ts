@@ -1,2 +1,5 @@
-import { providers } from "../../../lib/providers";
-export async function GET(){const result=await Promise.all(Object.values(providers).map(async p=>({name:p.name,model:p.model,capabilities:p.capabilities(),health:await p.healthCheck()})));return Response.json({providers:result,selected:"mock"})}
+import { env } from "cloudflare:workers";
+import type { AppBindings } from "../../../lib/config";
+import { createProvider } from "../../../lib/providers";
+const bindings=env as unknown as AppBindings;
+export async function GET(){const selected=bindings.MUSIC_PROVIDER||"mock",provider=createProvider(selected,{aiServiceBaseUrl:bindings.AI_SERVICE_BASE_URL,aiServiceToken:bindings.AI_SERVICE_TOKEN,aceStepModel:bindings.ACESTEP_MODEL}),result=[{name:provider.name,model:provider.model,capabilities:provider.capabilities(),health:await provider.healthCheck()}];return Response.json({providers:result,selected})}

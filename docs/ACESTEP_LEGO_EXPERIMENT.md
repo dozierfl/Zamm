@@ -115,6 +115,16 @@ All generated stems were stereo, 48 kHz, and exactly eight seconds. The sum of b
 
 Dedicated separation is materially better suited than ACE-Step contextual generation to faithful timing and mix reconstruction, but this single test does not establish pristine studio-quality isolation. Its current product role is a provisional editing aid for stems that remain in context or receive further processing, not a promise of clean solo tracks. Any separator model must also pass an explicit model-weight licensing review before product use.
 
+### Base-model master-generation check
+
+The Mac Studio master workflow was validated end to end with `acestep-v15-base`, `thinking=false`, and a 12-second neo-soul request. The eight-step render persisted and played correctly but was judged strongly lo-fi. A controlled same-seed 32-step direct comparison did not improve the result and introduced a prominent noise artifact at the beginning. Increasing inference steps therefore did not address master quality for this request.
+
+The base model is not approved for Dozi's master-generation path from this test. Retain it only for bounded advanced-task R&D and use a separate turbo-model validation for master generation. The 32-step comparison is an ignored local artifact and is not a product asset.
+
+The follow-up loaded `acestep-v15-turbo` and repeated the same-seed 12-second request. Turbo was judged better than base but still short of production quality. A 16-step request produced a byte-identical file to the eight-step request, confirming that step increases do not provide a quality lever for this turbo path.
+
+A concise high-fidelity caption changed the output but introduced audible clashing notes, dissonance, and cymbal harshness. A four-candidate clean-caption batch was then screened for clipping, high-frequency energy, opening imbalance, and trailing silence. Automated checks rejected two candidates; the listener preferred candidate B among the finalists, but still judged it not production-ready. Turbo plus candidate screening improves selection odds but does not establish acceptable production quality. ACE-Step remains an experimental master provider.
+
 ## Next recommendation
 
 Complete any broader validation with representative real mixes, multiple musical genres, objective separation metrics where clean reference stems exist, and a blinded multi-listener panel. Refine automated contextual-candidate rejection using labeled listening data, but keep final musical selection human-controlled. Do not adopt a single provider default from this sweep. Treat Lego as a creative “regenerate track” experiment and dedicated separation as a provisional editing aid, not as guarantees of production-ready isolated tracks. Do not build the mixer foundation yet.

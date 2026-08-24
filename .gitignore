@@ -43,6 +43,7 @@ yarn-error.log*
 /artifacts/acestep-extract/
 /artifacts/bs-roformer-input/
 /artifacts/bs-roformer-output/
+/artifacts/acestep-master-quality/
 ai-service/.venv/
 __pycache__/
 .pytest_cache/
