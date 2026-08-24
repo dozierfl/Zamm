@@ -39,6 +39,9 @@ yarn-error.log*
 /outputs/
 /work/
 /artifacts/acestep-lego/
+/artifacts/acestep-extract/
+/artifacts/bs-roformer-input/
+/artifacts/bs-roformer-output/
 ai-service/.venv/
 __pycache__/
 .pytest_cache/

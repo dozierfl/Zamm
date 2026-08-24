@@ -105,6 +105,16 @@ The first-to-last offset changed by only 65 ms, so this run does not show steadi
 
 The hardware-feasibility bottleneck is removed on this Mac Studio, but the musical/product conclusion is not overturned. Lego remains suitable for creative contextual alternatives, not dependable multitrack reconstruction or guaranteed production-ready instrument tracks.
 
+### Extract and dedicated-separation comparison
+
+ACE-Step Extract was tested directly on the eight-second source with target `bass`, seed 9701, 32 steps, guidance 8, and shift 3. It preserved the exact source duration and aligned at a measured 0 ms offset, but listening found that it did not convincingly sound like bass and contained audible leakage. Extract is therefore not a faithful source-separation substitute for this use case.
+
+As a bounded R&D comparison, the same source was processed by the recommended six-stem BS-RoFormer checkpoint from `bs-roformer-infer` 0.1.5. The checkpoint SHA-256 was verified as `24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e`. This evaluation makes no production-use or model-weight licensing claim.
+
+All generated stems were stereo, 48 kHz, and exactly eight seconds. The sum of bass, drums, guitar, other, piano, and vocals correlated 0.999968 with the source and left a -59.83 dBFS RMS residual against a -17.97 dBFS source. The model assigned nearly all material to drums and other; bass, guitar, piano, and vocals were effectively silent. Listening nevertheless found audible artifacts in the exposed drums and other stems and did not consider them clean.
+
+Dedicated separation is materially better suited than ACE-Step contextual generation to faithful timing and mix reconstruction, but this single test does not establish pristine studio-quality isolation. Its current product role is a provisional editing aid for stems that remain in context or receive further processing, not a promise of clean solo tracks. Any separator model must also pass an explicit model-weight licensing review before product use.
+
 ## Next recommendation
 
-Complete the remaining Prompt #5 validation with longer sources, multiple seeds per target, section-level drift analysis, and a blinded multi-listener panel. Refine automated candidate rejection using labeled listening data, but keep final musical selection human-controlled. Do not adopt a single provider default from this sweep. Treat Lego as a creative “regenerate track” experiment, not a multitrack reconstruction foundation, unless that broader benchmark overturns this result. Do not build the mixer foundation yet.
+Complete any broader validation with representative real mixes, multiple musical genres, objective separation metrics where clean reference stems exist, and a blinded multi-listener panel. Refine automated contextual-candidate rejection using labeled listening data, but keep final musical selection human-controlled. Do not adopt a single provider default from this sweep. Treat Lego as a creative “regenerate track” experiment and dedicated separation as a provisional editing aid, not as guarantees of production-ready isolated tracks. Do not build the mixer foundation yet.
