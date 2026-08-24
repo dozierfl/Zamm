@@ -2,7 +2,7 @@
 
 ## Decision
 
-**C — creative regeneration tool only (pending human listening).** Lego produced independently rendered, target-conditioned audio with exact file-length alignment and some useful spectral differentiation. It did not demonstrate transient-locked, sample-accurate performance: envelope correlation was low, best-lag offsets were large, and target/tempo adherence varied substantially by seed. Successful outputs are still classified `NATIVE_TRACK` / `GENERATED_NATIVE` / `LEGO_CONTEXTUAL`, not `DERIVED_STEM`, because the installed task generates rather than extracts.
+**C — creative regeneration tool only (confirmed by initial human listening; broader panel pending).** Lego produced independently rendered, target-conditioned audio with exact file-length alignment and some useful spectral differentiation. It did not demonstrate transient-locked, sample-accurate performance: envelope correlation was low, best-lag offsets were large, and target/tempo adherence varied substantially by seed. Initial guitar listening also found weak instrument identity and audible artifacts. Successful outputs are still classified `NATIVE_TRACK` / `GENERATED_NATIVE` / `LEGO_CONTEXTUAL`, not `DERIVED_STEM`, because the installed task generates rather than extracts.
 
 ## Baseline and installed behavior
 
@@ -58,6 +58,31 @@ Lego reduces dependence on traditional separation **for newly generated contextu
 
 On this M1, offload overhead dominates and memory margin is narrow. Production experimentation should use a dedicated GPU worker, cloud GPU, or larger-memory Apple Silicon system; no vendor or cost conclusion is implied.
 
-## Prompt #5 recommendation
+## Mac Studio Prompt #5 follow-up
 
-**Prompt #5 — GPU validation and listening benchmark for contextual-track regeneration.** Run a longer controlled set on higher-memory hardware, include blinded human listening, multiple seeds, section-level drift analysis, and bass/drums/keyboard/guitar comparisons. Treat Lego as a creative “regenerate track” experiment, not a multitrack reconstruction foundation, unless that benchmark overturns this result. Do not build the mixer foundation yet.
+A higher-memory Apple Silicon follow-up used the same ACE-Step commit, base model, no-LM conditioning, source WAV, targets, and seeds. The runtime detected 77.8 GB unified memory, selected its unlimited tier, enabled native MLX DiT/VAE, and required no CPU offload.
+
+The original three targets reproduced their Prompt #4 technical metrics while completing much faster:
+
+| Target | MacBook wall time | Mac Studio wall time | Speedup |
+|---|---:|---:|---:|
+| Bass 8401, first/cold request | 160.35 s | 10.19 s | 15.7x |
+| Drums 8402, warm | 135.92 s | 2.09 s | 65.1x |
+| Keyboard 8403, warm | 141.89 s | 2.08 s | 68.2x |
+
+The MacBook and Mac Studio bass 8401 renders had identical WAV parameters and effectively identical signal content but not bit-identical PCM. Sample correlation was 0.99999948, the difference signal measured -67.58 dBFS RMS, and signal-to-error ratio was 59.82 dB. Treat seeded MLX output as musically repeatable across Apple Silicon machines, not byte-deterministic across hardware.
+
+Guitar seed 8406 was then used for a controlled listening and parameter sweep:
+
+- Eight steps had the weakest guitar identity and most audible artifacts. Sixteen steps was modestly better, and 32 steps improved again. Sixty-four steps produced little further improvement, establishing 32 as the practical ceiling for this source.
+- Guidance 9 strengthened guitar identity but increased harshness. Guidance 7 was smoother but less recognizable. Guidance 8 was retained as the midpoint for the shift comparison.
+- A guitar-specific caption improved heuristic tempo, pitch-class, envelope offset, and correlation but sounded effectively the same as the ensemble caption. Prompt wording did not overcome the perceived identity/artifact limitation.
+- Shift 1 was judged much better than shift 3. At 32 steps and guidance 8 it reduced high-frequency energy and trailing silence, improved envelope correlation from 0.214 to 0.246, and preserved exact file length with no clipping.
+
+The leading **experimental guitar** configuration for this source is therefore `steps=32`, `guidance=8`, `shift=1`, and `thinking=false`. It is not a universal default: it has been evaluated on one eight-second source and one primary guitar seed, with informal single-listener feedback rather than a blinded panel. Tempo estimation remained 100 BPM against the 74.07 BPM source, envelope offset remained large (-1710 ms), and approximately 659 ms of trailing silence remained.
+
+The hardware-feasibility bottleneck is removed on this Mac Studio, but the musical/product conclusion is not overturned. Lego remains suitable for creative contextual alternatives, not dependable multitrack reconstruction or guaranteed production-ready instrument tracks.
+
+## Next recommendation
+
+Complete the remaining Prompt #5 validation with longer sources, multiple seeds per target, section-level drift analysis, and a blinded multi-listener panel. Validate `steps=32`, `guidance=8`, `shift=1` across guitar, bass, drums, and keyboard before considering any provider default change. Treat Lego as a creative “regenerate track” experiment, not a multitrack reconstruction foundation, unless that broader benchmark overturns this result. Do not build the mixer foundation yet.
