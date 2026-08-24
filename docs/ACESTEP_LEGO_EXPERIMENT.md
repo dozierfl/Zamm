@@ -87,6 +87,22 @@ A four-candidate guitar batch then tested that selection workflow with seeds 840
 
 This supports a staged product experiment: generate multiple seeds, automatically reject obvious tempo/leakage/silence failures, and require human selection among finalists. Automated metrics are useful for pruning, not final musical ranking. Even the preferred candidate retained audible artifacts and was not judged production-ready.
 
+### Thirty-second engineering drift test
+
+A new 30-second base-model instrumental source was generated only for timing/drift validation. The listener considered it suitable for that engineering purpose but not for musical-quality conclusions. It was stereo 48 kHz/16-bit PCM, requested at 74 BPM in F# minor, and contained approximately 4.25 seconds of trailing silence. A contextual drums render used seed 9601, 32 steps, guidance 8, and shift 3.
+
+The drums output preserved the exact 1,440,000-sample length with no clipping or sample-rate difference. The source tempo heuristic was 75.47 BPM; the drums output estimated 63.16 BPM. Overall envelope correlation was 0.288 at -205 ms.
+
+Section analysis initially included 20-30 seconds, but shared trailing silence inflated that window's correlation. The corrected active-audio analysis used three eight-second windows:
+
+| Active window | Best envelope offset | Correlation |
+|---|---:|---:|
+| 0-8 s | +465 ms | 0.236 |
+| 8-16 s | +1230 ms | 0.247 |
+| 16-24 s | +530 ms | 0.161 |
+
+The first-to-last offset changed by only 65 ms, so this run does not show steadily accumulating clock drift. It does show weak, unstable section-level correspondence, including a middle-section reinterpretation more than one second from the source. Because correlations are low, the offsets are warning indicators rather than correction values. Lego preserves container length but not dependable performance timing or tempo.
+
 The hardware-feasibility bottleneck is removed on this Mac Studio, but the musical/product conclusion is not overturned. Lego remains suitable for creative contextual alternatives, not dependable multitrack reconstruction or guaranteed production-ready instrument tracks.
 
 ## Next recommendation
