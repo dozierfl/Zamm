@@ -10,7 +10,7 @@ npm run dev
 Open `http://localhost:3000`, create a Dozi account, and generate a song. Local D1 and R2 state lives under `.wrangler` and is ignored by source control.
 # Local architecture services
 
-1. Copy `.env.example` to `.env.local`.
+1. Create an ignored `.dev.vars` file for Worker bindings. At minimum, set `DATABASE_URL=postgres://dozi:dozi_local_only@127.0.0.1:5432/dozi` for the included Docker service. Use `.env.local` only for Node-side migration commands.
 2. Run `docker compose up -d postgres`.
 3. Run `npm run db:migrate`.
 4. Start FastAPI using the command in `PROVIDER_INTEGRATION.md` when testing `MUSIC_PROVIDER=ai-service`.
