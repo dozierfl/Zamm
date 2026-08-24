@@ -125,6 +125,12 @@ The follow-up loaded `acestep-v15-turbo` and repeated the same-seed 12-second re
 
 A concise high-fidelity caption changed the output but introduced audible clashing notes, dissonance, and cymbal harshness. A four-candidate clean-caption batch was then screened for clipping, high-frequency energy, opening imbalance, and trailing silence. Automated checks rejected two candidates; the listener preferred candidate B among the finalists, but still judged it not production-ready. Turbo plus candidate screening improves selection odds but does not establish acceptable production quality. ACE-Step remains an experimental master provider.
 
+The preferred candidate seed was extended to 30 seconds with the same clean caption and turbo settings. The longer window was judged materially more coherent and “not too bad,” but still somewhat harsh. This indicates that 12-second clips are poor master-quality evaluation targets for this model and that additional musical duration can reduce rushed or dissonant behavior, without establishing production readiness.
+
+A same-seed 30-second prompt variant requested restrained drums, brushed hi-hats, sparse dark cymbals, and a warm top end. Energy above 5 kHz fell from 0.240% to 0.179%, and energy above 8 kHz fell from 0.058% to 0.041%. Listening found a small improvement in the closed hi-hat but persistent harshness in the open hi-hat.
+
+A final lightweight dynamic de-harsh pass acted above approximately 6.5 kHz, reached at most 4 dB reduction, and engaged during 7.3% of frames. It improved the open hi-hat slightly but left audible distortion. The defect is therefore at least partly embedded in the generated transient rather than being only excess high-frequency level. More filtering would dull the mix without reconstructing a clean cymbal, so post-processing stopped. The best result remains a creative draft, not a finished master.
+
 ## Next recommendation
 
 Complete any broader validation with representative real mixes, multiple musical genres, objective separation metrics where clean reference stems exist, and a blinded multi-listener panel. Refine automated contextual-candidate rejection using labeled listening data, but keep final musical selection human-controlled. Do not adopt a single provider default from this sweep. Treat Lego as a creative “regenerate track” experiment and dedicated separation as a provisional editing aid, not as guarantees of production-ready isolated tracks. Do not build the mixer foundation yet.

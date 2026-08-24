@@ -26,3 +26,7 @@ Local/test queue execution is independent of status polling. Cloudflare environm
 4. Dozi: set `MUSIC_PROVIDER=acestep` and run `npm run dev`.
 
 Mock remains the default and requires no ACE-Step installation.
+
+## One-click Mac startup
+
+On the configured Apple Silicon workstation, open `scripts/start-dozi-studio.command` with Terminal. The launcher starts and waits for Docker Desktop, PostgreSQL, ACE-Step Turbo, the FastAPI gateway, and the Dozi web app in dependency order, then opens `http://localhost:3000`. Logs are written under the project-scoped `.tools/logs` directory. Keep the Terminal open; Control-C stops only the ACE-Step, gateway, and Dozi processes started by that launcher. Docker Desktop and PostgreSQL remain running.
