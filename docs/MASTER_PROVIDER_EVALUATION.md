@@ -18,6 +18,26 @@ The first 30-second vocal acceptance test also completed through the full pipeli
 
 Vocal-test classification: **A- / passed initial acceptance**. Track sibilance, exposed-key artifacts, and ambiguous instrument identity as known limitations; validate them across additional voices, keys, genres, and longer arrangements before production approval.
 
+### Measured pipeline results
+
+PostgreSQL metadata from all four Eleven Music v2 proof-of-concept jobs confirmed successful completion and the requested 48 kHz MP3 encoding:
+
+| Generated duration | Effective bitrate | End-to-end job time | Real-time factor |
+| --- | --- | --- | --- |
+| 12 seconds | 192.4 kbps | 6.64–8.56 seconds | 0.55–0.71x |
+| 30 seconds | 192.2 kbps | 8.93–9.40 seconds | 0.30–0.31x |
+
+The listener's initial 128 kbps impression was therefore perceptual rather than an encoding mismatch. The 30-second jobs completed at about three times faster than playback length. These measurements cover a small local sample and must not be treated as a provider latency guarantee.
+
+Initial gate status:
+
+- Instrumental master quality: passed for continued development.
+- Vocal realism, intelligibility, and pronunciation: passed for continued development.
+- Persistence, authenticated retrieval, range playback, and correct MP3 delivery: passed.
+- Requested encoding verification: passed.
+- Initial latency: passed; broader percentile and failure-rate sampling remains.
+- Production approval: not granted.
+
 Product classification: **A- / primary candidate**. Use Eleven Music v2 as Dozi's preferred hosted master provider for continued evaluation. Keep ACE-Step as an experimental local/fallback engine. Do not mark Eleven Music production-approved until contrasting genres, vocals, failure behavior, latency, costs, and applicable commercial terms pass the acceptance gate.
 
 ## Decision context
