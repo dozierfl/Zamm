@@ -8,6 +8,12 @@ ACESTEP="$PROJECTS/ACE-Step-1.5"
 DOCKER="/Applications/Docker.app/Contents/Resources/bin/docker"
 LOG_DIR="$TOOLS/logs"
 STARTED_PIDS=()
+PROVIDER="mock"
+
+if [[ -f "$PROJECT/.dev.vars" ]]; then
+  configured_provider="$(awk -F= '$1 == "MUSIC_PROVIDER" { value=substr($0,index($0,"=")+1) } END { print value }' "$PROJECT/.dev.vars")"
+  [[ -n "$configured_provider" ]] && PROVIDER="$configured_provider"
+fi
 
 export PATH="$TOOLS/node/bin:$TOOLS/bin:$TOOLS/uv-bin:$PATH"
 export UV_CACHE_DIR="$TOOLS/uv-cache"
@@ -30,19 +36,30 @@ echo "[2/5] Starting PostgreSQL..."
 cd "$PROJECT";"$DOCKER" compose up -d postgres
 wait_for_command "PostgreSQL" 90 "$DOCKER" compose exec -T postgres pg_isready -U dozi -d dozi
 
-echo "[3/5] Starting ACE-Step Turbo..."
-if curl --fail --silent http://127.0.0.1:8001/health >/dev/null 2>&1;then
-  curl --silent http://127.0.0.1:8001/health|grep -q 'acestep-v15-turbo'||{ echo "Port 8001 is running a non-turbo ACE-Step model. Stop it and retry.";exit 1; }
-  echo "ACE-Step Turbo is already ready."
-else
-  (export ACESTEP_CONFIG_PATH="acestep-v15-turbo" ACESTEP_INIT_LLM="false" ACESTEP_NO_INIT="false" ACESTEP_API_PORT="8001";cd "$ACESTEP";exec uv run acestep-api)>"$LOG_DIR/acestep-turbo.log" 2>&1&STARTED_PIDS+=("$!")
-  wait_for_url "ACE-Step Turbo" "http://127.0.0.1:8001/health" 300
-fi
+echo "[3/5] Preparing provider runtime ($PROVIDER)..."
+if [[ "$PROVIDER" == "acestep" ]]; then
+  if curl --fail --silent http://127.0.0.1:8001/health >/dev/null 2>&1;then
+    curl --silent http://127.0.0.1:8001/health|grep -q 'acestep-v15-turbo'||{ echo "Port 8001 is running a non-turbo ACE-Step model. Stop it and retry.";exit 1; }
+    echo "ACE-Step Turbo is already ready."
+  else
+    (export ACESTEP_CONFIG_PATH="acestep-v15-turbo" ACESTEP_INIT_LLM="false" ACESTEP_NO_INIT="false" ACESTEP_API_PORT="8001";cd "$ACESTEP";exec uv run acestep-api)>"$LOG_DIR/acestep-turbo.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_url "ACE-Step Turbo" "http://127.0.0.1:8001/health" 300
+  fi
 
-echo "[4/5] Starting the Dozi AI gateway..."
-if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
-  (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
-  wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
+  echo "[4/5] Starting the Dozi AI gateway..."
+  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
+    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
+  fi
+elif [[ "$PROVIDER" == "ai-service" ]]; then
+  echo "[4/5] Starting the Dozi AI gateway..."
+  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
+    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
+  fi
+else
+  echo "Hosted/local provider needs no separate model process."
+  echo "[4/5] Dozi AI gateway not required."
 fi
 
 echo "[5/5] Starting Dozi Music Studio..."
