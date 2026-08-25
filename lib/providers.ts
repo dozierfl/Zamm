@@ -20,7 +20,7 @@ export class ElevenLabsMusicProvider implements MusicGenerationProvider{
     if(request.outputMode!=="MASTER_ONLY")throw new Error("PROVIDER_OUTPUT_MODE_UNSUPPORTED");
     let response:Response;
     try{response=await fetch(`${this.baseUrl}/v1/music?output_format=mp3_48000_192`,{method:"POST",headers:{"xi-api-key":this.apiKey,"content-type":"application/json","accept":"audio/mpeg"},body:JSON.stringify({prompt:elevenLabsPrompt(request),music_length_ms:Math.max(3000,request.compositionPlan.durationSeconds*1000),model_id:this.model,force_instrumental:request.compositionPlan.vocal.enabled===false})})}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
-    if(!response.ok)throw new Error(elevenLabsError(response.status,response.headers.get("request-id")||undefined));
+    if(!response.ok){const body=await response.json().catch(()=>null) as {detail?:{status?:string}}|null,status=body?.detail?.status;if(status==="bad_prompt"||status==="bad_composition_plan")throw new Error("PROVIDER_PROMPT_REJECTED");throw new Error(elevenLabsError(response.status,response.headers.get("request-id")||undefined))}
     const bytes=new Uint8Array(await response.arrayBuffer());
     if(bytes.length===0)throw new Error("GENERATION_INVALID_RESULT");
     return{assets:[{assetKey:"master-mix",role:"MASTER",provenance:"GENERATED_NATIVE",isPrimary:true,sortOrder:0,audio:{bytes},metadata:{mimeType:response.headers.get("content-type")?.split(";")[0]||"audio/mpeg",codec:"mp3",sampleRate:48000,bitDepth:16,channels:2,durationSeconds:Math.max(3,request.compositionPlan.durationSeconds),waveformData:[]},providerMetadata:{generationMethod:"FULL_SONG",songId:response.headers.get("song-id")||undefined,model:this.model}}],providerMetadata:{model:this.model}}
