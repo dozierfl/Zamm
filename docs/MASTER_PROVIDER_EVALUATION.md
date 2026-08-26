@@ -1,6 +1,25 @@
 # Master generation provider evaluation
 
-Status: Eleven Music v2 validated as Dozi's primary master-generation candidate. Broader genre, vocal, and commercial-terms validation remains.
+Status: Eleven Music v2 validated as Dozi's primary hosted master-generation candidate. MiniMax Music 3 MLX passed an initial local Apple Silicon feasibility test. Broader genre, vocal, latency, and commercial-terms validation remains.
+
+## MiniMax Music 3 MLX local proof of concept — 2026-08-26
+
+MiniMax Music 3 was evaluated locally on an Apple Silicon Mac Studio with 96 GB unified memory. The ComfyUI/PyTorch route was unsuitable for the product path: its INT8 graph required an MPS operation that PyTorch did not implement, while the FP16 graph took approximately 21 minutes to generate a 15-second sample.
+
+The native MLX route using the MXFP8 model materially improved feasibility. A cold 15-second generation completed in approximately 71 seconds. A two-generation warm-process benchmark loaded the model in 2.148 seconds and generated the two 15-second WAV files in 56.241 and 55.258 seconds. The outputs were 44.1 kHz, 16-bit stereo PCM WAV files.
+
+Human listening classified the native MLX output as **A- / passed initial local feasibility**. The listener found the result musically convincing and retained the A- rating after identifying the airy high-frequency bed as prompt-conforming lo-fi/vinyl texture rather than an unintended standalone instrument. This is a small subjective sample, not a production-quality or latency guarantee.
+
+Product interpretation:
+
+- Promising private/local master-generation candidate on high-memory Apple Silicon.
+- Native MLX is the viable integration route; do not build the Dozi path on the tested ComfyUI/PyTorch workflow.
+- The observed warm throughput was about 3.7 times slower than playback length, so generation must remain asynchronous with visible progress and cancellation/discard behavior.
+- The model generates a stereo master, not independently controllable native tracks. It does not change the current multitrack product decision.
+- Preserve model/version, prompt, seed, timing, output format, and unchanged output bytes when it is integrated behind `MusicGenerationProvider`.
+- Before product exposure, repeat representative instrumental and vocal tests, measure longer-duration scaling and memory, validate failure recovery, and complete a current license/attribution review.
+
+MiniMax Music 3 should therefore be added later as an **experimental local provider**, while Eleven Music v2 remains Dozi's preferred hosted master-generation candidate.
 
 ## Eleven Music v2 proof-of-concept result — 2026-08-24
 
