@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { compose, contextualTrackGenerationSchema } from "../lib/domain.ts";
-import { AceStepMusicProvider, ElevenLabsMusicProvider, MockMusicProvider, createProvider } from "../lib/providers.ts";
+import { AceStepMusicProvider, ElevenLabsMusicProvider, MiniMaxMusicProvider, MockMusicProvider, createProvider } from "../lib/providers.ts";
 import { InlineTestGenerationQueue } from "../lib/generation-queue.ts";
 import { validateElevenLabsPolicy } from "../lib/provider-policy.ts";
 test("generation status GET is observational only",async()=>{const source=await readFile(new URL("../app/api/generations/[id]/route.ts",import.meta.url),"utf8");assert.doesNotMatch(source,/\.generate\(|orchestrator\.process|\.put\(/);assert.match(source,/select j\.id/)});
@@ -12,6 +12,8 @@ test("mock provider supports one aligned master and six aligned assets",async()=
 test("PostgreSQL schema encodes idempotency and normalized assets",async()=>{const migration=await readFile(new URL("../drizzle-pg/0000_condemned_silhouette.sql",import.meta.url),"utf8");assert.match(migration,/CREATE TABLE "version_assets"/);assert.match(migration,/jobs_user_idempotency_unique/);assert.match(migration,/versions_job_unique/);assert.match(migration,/parent_version_id/)});
 test("contextual track lineage is relational",async()=>{const migration=await readFile(new URL("../drizzle-pg/0004_freezing_lester.sql",import.meta.url),"utf8");assert.match(migration,/track_generation_method/);assert.match(migration,/source_asset_id/);assert.match(migration,/LEGO_CONTEXTUAL/);assert.match(migration,/version_assets_source_asset_id_audio_assets_id_fk/)});
 test("ACE-Step selection stays behind the provider-neutral gateway",()=>{const provider=createProvider("acestep",{aiServiceBaseUrl:"http://127.0.0.1:8000",aceStepModel:"acestep-v15-turbo"});assert.ok(provider instanceof AceStepMusicProvider);assert.equal(provider.name,"acestep");assert.equal(provider.model,"acestep-v15-turbo");assert.equal(provider.capabilities().nativeMultitrack,false);assert.equal(provider.capabilities().masterGeneration,"EXPERIMENTAL");assert.equal(provider.capabilities().contextualRegeneration,"EXPERIMENTAL");assert.equal(provider.capabilities().sourceSeparation,"UNAVAILABLE")});
+
+test("MiniMax selection is an experimental local master provider",()=>{assert.throws(()=>createProvider("minimax"),/GENERATION_PROVIDER_UNAVAILABLE/);const provider=createProvider("minimax",{aiServiceBaseUrl:"http://127.0.0.1:8000",minimaxModel:"MiniMax-Music3-mxfp8"});assert.ok(provider instanceof MiniMaxMusicProvider);assert.equal(provider.name,"minimax");assert.equal(provider.model,"MiniMax-Music3-mxfp8");assert.equal(provider.capabilities().masterGeneration,"EXPERIMENTAL");assert.equal(provider.capabilities().nativeMultitrack,false)});
 
 test("Eleven Music selection is experimental and requires its dedicated key",()=>{assert.throws(()=>createProvider("elevenlabs"),/GENERATION_PROVIDER_UNAVAILABLE/);const provider=createProvider("elevenlabs",{elevenLabsApiKey:"test-key"});assert.ok(provider instanceof ElevenLabsMusicProvider);assert.equal(provider.name,"elevenlabs");assert.equal(provider.model,"music_v2");assert.equal(provider.capabilities().masterGeneration,"EXPERIMENTAL");assert.equal(provider.capabilities().nativeMultitrack,false)});
 

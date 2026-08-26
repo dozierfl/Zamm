@@ -4,6 +4,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from .ace_step import AceStepClient, AceStepError, AceStepRequestTranslator, AceStepSettings
+from .minimax import MiniMaxClient, MiniMaxError, MiniMaxRequestTranslator, MiniMaxSettings
 
 Role=Literal["MASTER","PREMASTER","NATIVE_TRACK","DERIVED_STEM","EFFECT_RETURN","ALTERNATIVE","REFERENCE","UPLOAD"]
 Provenance=Literal["GENERATED_NATIVE","SEPARATED","RENDERED","UPLOADED","REFERENCE","DERIVED"]
@@ -24,6 +25,7 @@ class Asset(BaseModel):
 class Result(BaseModel):assets:list[Asset];providerMetadata:dict[str,Any]={}
 
 def settings():return AceStepSettings(base_url=os.getenv("ACESTEP_BASE_URL","http://127.0.0.1:8001"),api_key=os.getenv("ACESTEP_API_KEY") or None,model=os.getenv("ACESTEP_MODEL","acestep-v15-turbo"),timeout_seconds=float(os.getenv("ACESTEP_TIMEOUT_SECONDS","900")),poll_interval_seconds=float(os.getenv("ACESTEP_POLL_INTERVAL_MS","2000"))/1000,thinking=os.getenv("ACESTEP_THINKING","false").lower()=="true",inference_steps=int(os.getenv("ACESTEP_INFERENCE_STEPS","8")))
+def minimax_settings():return MiniMaxSettings(base_url=os.getenv("MINIMAX_BASE_URL","http://127.0.0.1:8002"),model=os.getenv("MINIMAX_MODEL","MiniMax-Music3-mxfp8"),timeout_seconds=float(os.getenv("MINIMAX_TIMEOUT_SECONDS","1800")),steps=int(os.getenv("MINIMAX_STEPS","30")))
 app=FastAPI(title="Dozi AI Service",version="0.2.0")
 logger=logging.getLogger("dozi.ai")
 ace_assets:dict[str,tuple[bytes,str]]={}
@@ -35,7 +37,7 @@ def wav_bytes(seed:int,duration:int,bpm:int):
     with wave.open(out,"wb") as wav:wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(rate);wav.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*(110+(seed%12)*7)*i/rate))) for i in range(rate*duration)))
     return out.getvalue(),[0.1526]*96
 @app.get("/health")
-async def health():return{"status":"ready","gatewayAvailable":True,"aceStep":await AceStepClient(settings()).health()}
+async def health():return{"status":"ready","gatewayAvailable":True,"aceStep":await AceStepClient(settings()).health(),"minimax":await MiniMaxClient(minimax_settings()).health()}
 @app.get("/capabilities")
 async def capabilities(authorization:str|None=Header(default=None)):
     authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"supported-not-integrated","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"UNAVAILABLE","aceStep":state}
@@ -49,6 +51,16 @@ async def ace_generate(request:Request,authorization:str|None=Header(default=Non
     for index,item in enumerate(outputs):
         asset_token=hashlib.sha256(f"{request.jobId}:{index}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);assets.append(Asset(assetKey="master" if index==0 else f"alternative-{index}",role="MASTER" if index==0 else "ALTERNATIVE",provenance="GENERATED_NATIVE",isPrimary=index==0,sortOrder=index,audio=Audio(sourceUrl=f"{public_base}/v1/ace-assets/{asset_token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=item.provider_metadata))
     logger.info(json.dumps({"event":"ace_step_completed","jobId":request.jobId,"taskId":assets[0].providerMetadata.get("aceStepTaskId"),"resultCount":len(assets),"elapsedSeconds":round(time.monotonic()-started,3)}));return Result(assets=assets,providerMetadata={"provider":"ace-step-1.5","model":payload["model"],"requestedSeed":request.seed,"taskId":assets[0].providerMetadata.get("aceStepTaskId")})
+@app.post("/v1/minimax-generation",response_model=Result)
+async def minimax_generate(request:Request,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    if request.outputMode!="MASTER_ONLY":raise HTTPException(422,detail={"code":"PROVIDER_OUTPUT_MODE_UNSUPPORTED","retryable":False})
+    cfg=minimax_settings();payload=MiniMaxRequestTranslator(cfg).translate(request);started=time.monotonic();logger.info(json.dumps({"event":"minimax_started","jobId":request.jobId,"provider":"minimax-music3-mlx","model":cfg.model}))
+    try:item=await MiniMaxClient(cfg).generate(payload)
+    except MiniMaxError as exc:logger.warning(json.dumps({"event":"minimax_failed","jobId":request.jobId,"code":exc.code,"retryable":exc.retryable,"elapsedSeconds":round(time.monotonic()-started,3)}));raise HTTPException(503 if exc.retryable else 422,detail={"code":exc.code,"retryable":exc.retryable}) from None
+    asset_token=hashlib.sha256(f"{request.jobId}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);public_base=os.getenv("AI_SERVICE_PUBLIC_BASE_URL","http://127.0.0.1:8000");elapsed=round(time.monotonic()-started,3);metadata={**item.provider_metadata,"generationMethod":"FULL_SONG","elapsedSeconds":elapsed}
+    asset=Asset(assetKey="master",role="MASTER",provenance="GENERATED_NATIVE",isPrimary=True,sortOrder=0,audio=Audio(sourceUrl=f"{public_base}/v1/generated-assets/{asset_token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=metadata)
+    logger.info(json.dumps({"event":"minimax_completed","jobId":request.jobId,"elapsedSeconds":elapsed}));return Result(assets=[asset],providerMetadata={"provider":"minimax-music3-mlx","model":cfg.model,"requestedSeed":request.seed,"elapsedSeconds":elapsed})
 @app.post("/v1/ace-step-lego",response_model=Result)
 async def ace_lego(request:LegoRequest,authorization:str|None=Header(default=None)):
     authorize(authorization)
@@ -67,6 +79,9 @@ def ace_asset(asset_token:str,authorization:str|None=Header(default=None)):
     authorize(authorization);item=ace_assets.pop(asset_token,None)
     if not item:raise HTTPException(404,"asset unavailable")
     return Response(item[0],media_type=item[1],headers={"cache-control":"no-store"})
+@app.get("/v1/generated-assets/{asset_token}")
+def generated_asset(asset_token:str,authorization:str|None=Header(default=None)):
+    return ace_asset(asset_token,authorization)
 @app.post("/v1/mock-generation",response_model=Result)
 def mock_generate(request:Request,authorization:str|None=Header(default=None)):
     authorize(authorization);definitions=[("MASTER",None,None),("PREMASTER",None,None),("NATIVE_TRACK","Kick","DRUMS"),("NATIVE_TRACK","Snare","DRUMS"),("NATIVE_TRACK","Bass","MUSIC"),("NATIVE_TRACK","Lead Vocal","VOCALS")]
