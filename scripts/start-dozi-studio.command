@@ -5,6 +5,7 @@ PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECTS="$(dirname "$PROJECT")"
 TOOLS="$PROJECTS/.tools"
 ACESTEP="$PROJECTS/ACE-Step-1.5"
+MINIMAX_HOME="$PROJECTS/MiniMax-Music3-MLX"
 DOCKER="/Applications/Docker.app/Contents/Resources/bin/docker"
 LOG_DIR="$TOOLS/logs"
 STARTED_PIDS=()
@@ -50,6 +51,18 @@ if [[ "$PROVIDER" == "acestep" ]]; then
   if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
     (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
     wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
+  fi
+elif [[ "$PROVIDER" == "minimax" ]]; then
+  if curl --fail --silent http://127.0.0.1:8002/health | grep -q '"'"'"modelLoaded":true'"'"';then echo "MiniMax Music 3 MLX is already ready.";else
+    [[ -x "$MINIMAX_HOME/.venv/bin/uvicorn" ]]||{ echo "MiniMax service environment is unavailable. See docs/LOCAL_DEVELOPMENT.md.";exit 1; }
+    (export MINIMAX_MODEL_PATH="$MINIMAX_HOME/model" MINIMAX_MODEL="MiniMax-Music3-mxfp8";exec "$MINIMAX_HOME/.venv/bin/uvicorn" server:app --app-dir "$PROJECT/minimax-service" --host 127.0.0.1 --port 8002)>"$LOG_DIR/minimax-service.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_command "MiniMax Music 3 MLX" 120 bash -c 'curl --fail --silent http://127.0.0.1:8002/health | grep -q '"'"'"modelLoaded":true'"'"''
+  fi
+  echo "[4/5] Starting the Dozi AI gateway..."
+  if curl --fail --silent http://127.0.0.1:8000/health | grep -q '"'"'"minimax"'"'"';then echo "Dozi AI gateway is already ready.";else
+    if gateway_pid="$(lsof -ti tcp:8000 2>/dev/null)" && [[ -n "$gateway_pid" ]];then echo "Port 8000 is occupied by an older gateway process. Stop the previous Dozi launcher and retry.";exit 1;fi
+    (export MINIMAX_BASE_URL="http://127.0.0.1:8002";cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_command "Dozi AI gateway with MiniMax" 120 bash -c 'curl --fail --silent http://127.0.0.1:8000/health | grep -q '"'"'"minimax"'"'"''
   fi
 elif [[ "$PROVIDER" == "ai-service" ]]; then
   echo "[4/5] Starting the Dozi AI gateway..."

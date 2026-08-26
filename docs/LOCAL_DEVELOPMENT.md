@@ -38,6 +38,8 @@ MiniMax uses a dedicated process so its large model and MLX dependencies do not 
 
 Wait for `http://127.0.0.1:8002/health` to report `modelLoaded: true` before generating. The service accepts one generation at a time and returns HTTP 429 while busy. Stop the service with Control-C when local generation is complete.
 
+After the one-time dependency installation, `scripts/start-dozi-studio.command` handles this sequence automatically when `.dev.vars` selects `MUSIC_PROVIDER=minimax`: it starts or reuses MiniMax, waits for the model, starts the gateway, then starts Dozi. `scripts/start-minimax-service.command` remains available for standalone model-service testing.
+
 ## One-click Mac startup
 
 On the configured Apple Silicon workstation, open `scripts/start-dozi-studio.command` with Terminal. The launcher starts and waits for Docker Desktop, PostgreSQL, ACE-Step Turbo, the FastAPI gateway, and the Dozi web app in dependency order, then opens `http://localhost:3000`. Logs are written under the project-scoped `.tools/logs` directory. Keep the Terminal open; Control-C stops only the ACE-Step, gateway, and Dozi processes started by that launcher. Docker Desktop and PostgreSQL remain running.

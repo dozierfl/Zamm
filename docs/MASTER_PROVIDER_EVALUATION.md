@@ -21,6 +21,12 @@ Product interpretation:
 
 MiniMax Music 3 should therefore be added later as an **experimental local provider**, while Eleven Music v2 remains Dozi's preferred hosted master-generation candidate.
 
+### Dozi end-to-end acceptance result — 2026-08-26
+
+The experimental provider subsequently completed a real 12-second generation through Dozi's full local path: browser request, PostgreSQL job, provider-neutral orchestration, FastAPI gateway, dedicated native MLX service, one-time WAV transfer, object storage, immutable version/asset persistence, and browser playback. The job completed in 41.56 seconds and stored an unchanged 2,117,676-byte, 44.1 kHz, 16-bit stereo PCM WAV. Human listening found no audible artifacts and a convincing lo-fi sound, consistent with the earlier A- assessment.
+
+This validates the integration architecture and a single local instrumental acceptance case. It does not yet validate vocal quality, longer-song scaling, concurrent generation, broad genres, production reliability, or native multitrack output.
+
 ## Eleven Music v2 proof-of-concept result — 2026-08-24
 
 The production adapter completed two 12-second and one 30-second instrumental generations through the full Dozi pipeline: ElevenLabs API, normalized provider result, object storage, PostgreSQL persistence, authenticated library retrieval, range-capable playback, and browser playback.

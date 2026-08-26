@@ -63,7 +63,7 @@ class MiniMaxRequestTranslator:
         options = request.providerOptions or {}
         return {
             "caption": caption,
-            "lyrics": request.lyrics.strip() if plan.vocal.enabled else "[instrumental]",
+            "lyrics": (request.lyrics.strip() or "[instrumental]") if plan.vocal.enabled else "[instrumental]",
             "durationSeconds": plan.durationSeconds,
             "seed": request.seed,
             "steps": int(options.get("steps", self.settings.steps)),

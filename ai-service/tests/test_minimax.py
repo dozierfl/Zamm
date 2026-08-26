@@ -57,6 +57,9 @@ def test_translator_maps_plan_lyrics_seed_and_instrumental():
     assert "Rhodes" in payload["caption"]
     assert payload["lyrics"].startswith("[Verse]")
     assert translator.translate(request(False))["lyrics"] == "[instrumental]"
+    empty_vocal_request = request(True)
+    empty_vocal_request.lyrics = ""
+    assert translator.translate(empty_vocal_request)["lyrics"] == "[instrumental]"
 
 
 @pytest.mark.anyio

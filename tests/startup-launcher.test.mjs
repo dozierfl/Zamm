@@ -7,6 +7,9 @@ test("startup launcher only loads ACE-Step for the ACE-Step provider",async()=>{
   assert.match(script,/MUSIC_PROVIDER/);
   assert.match(script,/if \[\[ "\$PROVIDER" == "acestep" \]\]/);
   assert.match(script,/elif \[\[ "\$PROVIDER" == "ai-service" \]\]/);
+  assert.match(script,/elif \[\[ "\$PROVIDER" == "minimax" \]\]/);
+  assert.match(script,/MINIMAX_MODEL_PATH/);
+  assert.match(script,/minimax-service/);
   assert.match(script,/Hosted\/local provider needs no separate model process/);
   assert.ok(script.indexOf('if [[ "$PROVIDER" == "acestep" ]]')<script.indexOf('exec uv run acestep-api'));
 });
