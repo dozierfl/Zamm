@@ -409,6 +409,10 @@ test("multitrack workspace synchronizes assets without doubling the master", asy
   assert.match(studio, /timelineStartSeconds/);
   assert.match(studio, /sourceStartSeconds/);
   assert.match(studio, /Finished master only/);
+  assert.match(studio, /Rendered master/);
+  assert.match(studio, /Live tracks/);
+  assert.match(studio, /Playing the saved Version master/);
+  assert.match(studio, /nextMode \|\| \(nextVersion\?\.provider === "dozi-mixer"/);
   assert.match(studio, /source assets unchanged/);
 });
 test("derived-stem separation is asynchronous, private, and source-linked", async () => {

@@ -827,6 +827,43 @@ textarea:focus {
 .track-control input {
   accent-color: var(--lime);
 }
+.mixer-transport > audio {
+  display: none;
+}
+.audition-mode {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid #30332a;
+  border-radius: 9px;
+  background: #0e0f0d;
+}
+.audition-mode span {
+  margin-right: 3px;
+  color: #73766c;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+.audition-mode button {
+  border: 1px solid #3a3d33;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #191a17;
+  color: #8c8f84;
+  font-size: 9px;
+}
+.audition-mode button.active {
+  border-color: #71842f;
+  background: #2a3610;
+  color: var(--lime);
+}
+.audition-mode small {
+  margin-left: auto;
+  color: #74776d;
+  font-size: 9px;
+}
 .mixer-play {
   width: 36px;
   height: 36px;

@@ -2802,6 +2802,9 @@ function MultitrackWorkspace({
   const [versionId, setVersionId] = useState(data.versions[0]?.id || ""),
     [playing, setPlaying] = useState(false),
     [position, setPosition] = useState(0),
+    [auditionMode, setAuditionMode] = useState<"tracks" | "master">(
+      data.versions[0]?.provider === "dozi-mixer" ? "master" : "tracks",
+    ),
     [muted, setMuted] = useState<Record<string, boolean>>({}),
     [soloed, setSoloed] = useState<Record<string, boolean>>({}),
     [levels, setLevels] = useState<Record<string, number>>({}),
@@ -2818,6 +2821,7 @@ function MultitrackWorkspace({
     [mixNotice, setMixNotice] = useState(""),
     [mixError, setMixError] = useState("");
   const elements = useRef<Record<string, HTMLAudioElement | null>>({}),
+    masterElement = useRef<HTMLAudioElement | null>(null),
     context = useRef<AudioContext | null>(null),
     nodes = useRef<
       Record<
@@ -2859,6 +2863,7 @@ function MultitrackWorkspace({
       .padStart(2, "0")}`;
   function pauseElements() {
     Object.values(elements.current).forEach((element) => element?.pause());
+    masterElement.current?.pause();
   }
   function isMuted(track: TrackAsset) {
     return muted[track.id] ?? Boolean(track.metadata?.muted);
@@ -2902,21 +2907,50 @@ function MultitrackWorkspace({
     }
     applyMix();
   }
-  async function togglePlayback() {
+  async function beginPlayback(mode: "tracks" | "master") {
     if (!version) return;
+    if (positionRef.current >= version.duration - 0.01) {
+      positionRef.current = 0;
+      setPosition(0);
+    }
+    if (mode === "master") {
+      const element = masterElement.current;
+      if (!element) return;
+      element.currentTime = positionRef.current;
+      await element.play();
+    } else {
+      await ensureAudioGraph();
+    }
+    clockStart.current = performance.now() - positionRef.current * 1000;
+    started.current.clear();
+    setPlaying(true);
+  }
+  async function togglePlayback() {
     if (playing) {
       setPlaying(false);
       pauseElements();
       return;
     }
-    await ensureAudioGraph();
-    if (positionRef.current >= version.duration - 0.01) {
-      positionRef.current = 0;
-      setPosition(0);
+    try {
+      await beginPlayback(auditionMode);
+    } catch {
+      setMixError("The selected audio could not start playing.");
+      setPlaying(false);
     }
-    clockStart.current = performance.now() - positionRef.current * 1000;
+  }
+  async function changeAuditionMode(next: "tracks" | "master") {
+    if (next === auditionMode) return;
+    const resume = playing;
+    setPlaying(false);
+    pauseElements();
     started.current.clear();
-    setPlaying(true);
+    setAuditionMode(next);
+    if (resume)
+      try {
+        await beginPlayback(next);
+      } catch {
+        setMixError("The selected audio could not start playing.");
+      }
   }
   async function startSeparation() {
     if (!version) return;
@@ -3038,7 +3072,7 @@ function MultitrackWorkspace({
       if (!response.ok || !payload.version)
         throw new Error(payload.error?.message || "The new mix could not be saved.");
       await onRefresh();
-      selectVersion(payload.version.id);
+      selectVersion(payload.version.id, "master");
       setMixNotice(`Version ${payload.version.version} rendered and saved.`);
     } catch (error) {
       setMixError(error instanceof Error ? error.message : "The new mix could not be rendered.");
@@ -3053,9 +3087,18 @@ function MultitrackWorkspace({
     started.current.clear();
     positionRef.current = bounded;
     setPosition(bounded);
-    if (playing) clockStart.current = performance.now() - bounded * 1000;
+    if (playing) {
+      clockStart.current = performance.now() - bounded * 1000;
+      if (auditionMode === "master" && masterElement.current) {
+        masterElement.current.currentTime = bounded;
+        void masterElement.current.play().catch(() => setPlaying(false));
+      }
+    }
   }
-  function selectVersion(nextVersionId: string) {
+  function selectVersion(
+    nextVersionId: string,
+    nextMode?: "tracks" | "master",
+  ) {
     pauseElements();
     started.current.clear();
     positionRef.current = 0;
@@ -3065,6 +3108,10 @@ function MultitrackWorkspace({
     setSoloed({});
     setLevels({});
     setPans({});
+    const nextVersion = data.versions.find((item) => item.id === nextVersionId);
+    setAuditionMode(
+      nextMode || (nextVersion?.provider === "dozi-mixer" ? "master" : "tracks"),
+    );
     setVersionId(nextVersionId);
   }
   useEffect(() => {
@@ -3083,6 +3130,19 @@ function MultitrackWorkspace({
   useEffect(() => {
     if (!playing || !version) return;
     const tick = () => {
+      if (auditionMode === "master") {
+        const element = masterElement.current;
+        if (!element || element.ended) {
+          positionRef.current = version.duration;
+          setPosition(version.duration);
+          setPlaying(false);
+          return;
+        }
+        positionRef.current = element.currentTime;
+        setPosition(element.currentTime);
+        frame.current = requestAnimationFrame(tick);
+        return;
+      }
       const current = (performance.now() - clockStart.current) / 1000;
       if (current >= version.duration) {
         positionRef.current = version.duration;
@@ -3126,7 +3186,7 @@ function MultitrackWorkspace({
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       frame.current = null;
     };
-  }, [playing, tracks, version]);
+  }, [playing, tracks, version, auditionMode]);
   useEffect(() => {
     if (!separation || !["QUEUED", "PROCESSING"].includes(separation.status)) return;
     const timer = setInterval(async () => {
@@ -3200,6 +3260,18 @@ function MultitrackWorkspace({
         </label>
       </div>
       <div className="mixer-transport">
+        {version.audioUrl && (
+          <audio
+            ref={masterElement}
+            src={version.audioUrl}
+            preload="metadata"
+            onEnded={() => {
+              positionRef.current = version.duration;
+              setPosition(version.duration);
+              setPlaying(false);
+            }}
+          />
+        )}
         <button
           className="mixer-play"
           aria-label={playing ? "Pause all tracks" : "Play all tracks"}
@@ -3219,6 +3291,30 @@ function MultitrackWorkspace({
         />
         <span>{formatTime(version.duration)}</span>
       </div>
+      {hasStems && version.audioUrl && (
+        <div className="audition-mode" role="group" aria-label="Audition source">
+          <span>HEARING</span>
+          <button
+            className={auditionMode === "tracks" ? "active" : ""}
+            aria-pressed={auditionMode === "tracks"}
+            onClick={() => void changeAuditionMode("tracks")}
+          >
+            Live tracks
+          </button>
+          <button
+            className={auditionMode === "master" ? "active" : ""}
+            aria-pressed={auditionMode === "master"}
+            onClick={() => void changeAuditionMode("master")}
+          >
+            Rendered master
+          </button>
+          <small>
+            {auditionMode === "master"
+              ? "Playing the saved Version master"
+              : "Playing the editable stem reconstruction"}
+          </small>
+        </div>
+      )}
       {!hasStems && (
         <div className="master-only-note">
           <div>
