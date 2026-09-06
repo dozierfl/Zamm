@@ -57,6 +57,14 @@ Generation jobs and song versions retain nullable profile and immutable profile-
 
 MiniMax Music 3 remains useful for composition and guide-song generation, but its current interface does not accept a custom vocalist. A proof of concept may derive melody/timing from a MiniMax guide and render a replacement isolated vocal; the production target is shared-plan instrumental and vocal generation rather than source separation from a completed master.
 
+## Phrase-repair fallback
+
+Dozi now has a validated, non-destructive escape hatch for localized vocal defects. An owner can mark a lyric range, attach the aligned isolated vocal, import an owned clean punch-in, select that take, and render a new vocal alternative with bounded level matching and an equal-power crossfade. The original vocal and song master remain unchanged, and every source, candidate, and render remains owner-scoped.
+
+The first artist-reviewed regression repaired the persistent “my mix” conversion defect. A broad 0.00–4.00 second replacement exposed an entry-alignment error because a full-timeline take was incorrectly treated as a phrase-relative clip. The renderer now distinguishes near-equal-duration aligned takes and reads them from matching timeline coordinates. A localized 1.54–3.76 second repair with a 120 ms crossfade removed the anomaly, and the artist judged both boundaries clean.
+
+This passes the isolated-vocal phrase-repair gate. It does not yet pass a finished-song recomposition gate: the clean regression vocal has no matching instrumental stem, and pairing it with an unrelated or leakage-contaminated bed would not be a valid test. The next gate requires a real song version with an exact aligned vocal/instrumental stem pair.
+
 ## Acceptance gate
 
 No profile or provider is production-approved until representative testing measures identity similarity, lyric intelligibility, pronunciation, pitch/key accuracy, register transitions, artist-style recognition, emotion control, long-song identity stability, artifacts, unauthorized-use resistance, deletion/revocation behavior, latency, and artist approval. Human artist approval remains decisive.

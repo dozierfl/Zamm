@@ -1,41 +1,2729 @@
 /* eslint-disable jsx-a11y/media-has-caption, jsx-a11y/label-has-associated-control -- generated audio has no dialogue; policy checkbox is nested in its visible label */
 "use client";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-type Status="QUEUED"|"PREPARING"|"GENERATING"|"POST_PROCESSING"|"UPLOADING"|"COMPLETE"|"FAILED"|"CANCELLED";
-type Song={id:string;title:string;prompt:string;createdAt:string;version:number;duration:number;bpm:number;musicalKey:string;genre:string;provider?:string;status:Status;progress:number;waveform:number[];seed:number;audioUrl?:string;errorMessage?:string};
-type User={id:string;email:string;displayName:string};
-type ProviderStatus={name:string;model:string;available:boolean;masterGeneration:string};
-const paths:Record<string,string>={create:"M12 3v18M3 12h18",library:"M4 5v14M9 5v14M14 7v12M19 4v15",play:"m9 7 8 5-8 5V7Z",pause:"M9 7v10M15 7v10",heart:"M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l8.9 8.6 8.8-8.6a5.5 5.5 0 0 0 1.1-8.9Z",more:"M5 12h.01M12 12h.01M19 12h.01",spark:"m12 3-1.4 4.2L7 9l3.6 1.8L12 15l1.4-4.2L17 9l-3.6-1.8L12 3Z",search:"m21 21-4.3-4.3M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",skip:"m6 6 8 6-8 6V6Zm10 0v12",volume:"M11 5 6 9H2v6h4l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7",chevron:"m9 18 6-6-6-6",download:"M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"};
-const labels:Record<Status,string>={QUEUED:"Queued",PREPARING:"Preparing composition",GENERATING:"Generating audio",POST_PROCESSING:"Analyzing mix",UPLOADING:"Saving master",COMPLETE:"Ready",FAILED:"Generation failed",CANCELLED:"Cancelled"};
-function Icon({name}:{name:string}){return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={paths[name]}/></svg>}
-function Wave({data,progress=0,compact=false,onSeek}:{data:number[];progress?:number;compact?:boolean;onSeek?:(n:number)=>void}){return <button className={`waveform ${compact?"compact":""}`} aria-label="Seek in song" onClick={e=>{const r=e.currentTarget.getBoundingClientRect();onSeek?.((e.clientX-r.left)/r.width)}}>{data.map((p,i)=><i key={i} className={i/data.length<=progress?"played":""} style={{height:`${Math.max(10,p*100).toFixed(2)}%`}}/>)}</button>}
-
-function AuthGate({onAuthenticated}:{onAuthenticated:(u:User)=>void}){
- const[register,setRegister]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState("");
- async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError("");const form=new FormData(e.currentTarget),body={displayName:String(form.get("displayName")||""),email:String(form.get("email")||""),password:String(form.get("password")||"")};try{const res=await fetch(`/api/auth/${register?"register":"login"}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}),data=await res.json() as {user?:User;error?:{message:string}};if(!res.ok||!data.user)throw new Error(data.error?.message||"Could not sign in.");onAuthenticated(data.user)}catch(err){setError(err instanceof Error?err.message:"Could not sign in.")}finally{setBusy(false)}}
- return <div className="auth-screen"><section><div className="auth-brand"><span>dz</span><p>DOZI MUSIC STUDIO</p></div><h1>{register?"Create your studio":"Welcome back"}</h1><p>Your songs, versions, and masters stay attached to your private Dozi account—never a ChatGPT login.</p><form onSubmit={submit}>{register&&<label>Display name<input name="displayName" autoComplete="name" required maxLength={80}/></label>}<label>Email<input name="email" type="email" autoComplete="email" required/></label><label>Password<input name="password" type="password" autoComplete={register?"new-password":"current-password"} required minLength={10}/></label>{error&&<div className="auth-error" role="alert">{error}</div>}<button className="generate" disabled={busy}>{busy?"Please wait…":register?"Create account":"Sign in"}</button></form><button className="auth-switch" onClick={()=>{setRegister(v=>!v);setError("")}}>{register?"Already have an account? Sign in":"New to Dozi? Create an account"}</button></section></div>
+type Status =
+  | "QUEUED"
+  | "PREPARING"
+  | "GENERATING"
+  | "POST_PROCESSING"
+  | "UPLOADING"
+  | "COMPLETE"
+  | "FAILED"
+  | "CANCELLED";
+type Song = {
+  id: string;
+  title: string;
+  prompt: string;
+  createdAt: string;
+  version: number;
+  duration: number;
+  bpm: number;
+  musicalKey: string;
+  genre: string;
+  provider?: string;
+  status: Status;
+  progress: number;
+  waveform: number[];
+  seed: number;
+  audioUrl?: string;
+  errorMessage?: string;
+};
+type User = { id: string; email: string; displayName: string };
+type ProviderStatus = {
+  name: string;
+  model: string;
+  available: boolean;
+  masterGeneration: string;
+};
+type VocalProfile = {
+  id: string;
+  name: string;
+  status:
+    | "DRAFT"
+    | "COLLECTING"
+    | "READY"
+    | "TRAINING"
+    | "ACTIVE"
+    | "FAILED"
+    | "REVOKED";
+  isPrivate: boolean;
+  usableSingingSeconds: number;
+  qualityScore: number | null;
+  rangeLowMidi: number | null;
+  rangeHighMidi: number | null;
+  sourceCount: number;
+  consentedAt: string | null;
+  verifiedAt: string | null;
+  latestPhraseMatchScore: number | null;
+  createdAt: string;
+  sources: Array<{
+    id: string;
+    sourceType:
+      | "LIVE_SPEECH"
+      | "LIVE_SINGING"
+      | "OWNED_VOCAL_BOUNCE"
+      | "SEPARATED_OWNED_MIX";
+    originalFilename: string | null;
+    durationSeconds: number;
+    qualityScore: number | null;
+    includedInTraining: boolean;
+    analysisStatus: string;
+    audioUrl: string;
+    createdAt: string;
+  }>;
+};
+function importedPerformanceName(filename: string | null) {
+  return (filename || "Imported vocal").replace(
+    /\.part-\d+-of-\d+\.wav$/i,
+    "",
+  );
+}
+function visibleVoiceSources(sources: VocalProfile["sources"]) {
+  const seenImports = new Set<string>();
+  return sources.filter((source) => {
+    if (source.sourceType !== "OWNED_VOCAL_BOUNCE") return true;
+    const name = importedPerformanceName(source.originalFilename);
+    if (seenImports.has(name)) return false;
+    seenImports.add(name);
+    return true;
+  });
+}
+function voiceSourceSummary(
+  source: VocalProfile["sources"][number],
+  sources: VocalProfile["sources"],
+) {
+  if (source.sourceType !== "OWNED_VOCAL_BOUNCE")
+    return {
+      durationSeconds: source.durationSeconds,
+      analysisStatus: source.analysisStatus,
+      qualityScore: source.qualityScore,
+      partCount: 1,
+    };
+  const name = importedPerformanceName(source.originalFilename),
+    parts = sources.filter(
+      (item) =>
+        item.sourceType === "OWNED_VOCAL_BOUNCE" &&
+        importedPerformanceName(item.originalFilename) === name,
+    ),
+    scores = parts
+      .map((item) => item.qualityScore)
+      .filter((score): score is number => score !== null);
+  return {
+    durationSeconds: parts.reduce(
+      (total, item) => total + item.durationSeconds,
+      0,
+    ),
+    analysisStatus: parts.some((item) => item.analysisStatus === "PENDING")
+      ? "PENDING"
+      : parts.every((item) => item.analysisStatus === "PASSED")
+        ? "PASSED"
+        : "REJECTED",
+    qualityScore: scores.length
+      ? scores.reduce((total, score) => total + score, 0) / scores.length
+      : null,
+    partCount: parts.length,
+  };
+}
+type VocalChallenge = {
+  verificationId: string;
+  profileId: string;
+  phrase: string;
+  challengeToken: string;
+  expiresAt: string;
+  minimumSeconds: number;
+  maximumSeconds: number;
+};
+type VocalPreview = {
+  blob: Blob;
+  url: string;
+  kind: "identity" | "singing";
+  profileId: string;
+  duration: number;
+  channelCount: number;
+};
+type VocalRepairCandidate = {
+  id: string;
+  repairSessionId: string;
+  audioAssetId: string | null;
+  method: "OWNED_PUNCH_IN" | "RVC" | "SOULX_SVC";
+  label: string;
+  status: "PENDING" | "READY" | "SELECTED" | "REJECTED" | "FAILED";
+  audioUrl?: string;
+  createdAt?: string;
+};
+type VocalRepair = {
+  id: string;
+  songId: string;
+  sourceVersionId: string;
+  sourceVocalAssetId: string | null;
+  renderedAudioAssetId: string | null;
+  sourceVocalAudioUrl?: string;
+  renderedAudioUrl?: string;
+  vocalProfileId: string | null;
+  lyricText: string;
+  startSeconds: number;
+  endSeconds: number;
+  crossfadeMs: number;
+  status:
+    | "AWAITING_TAKE"
+    | "READY"
+    | "SELECTED"
+    | "RENDERING"
+    | "APPLIED"
+    | "FAILED"
+    | "CANCELLED";
+  candidates: VocalRepairCandidate[];
+  createdAt: string;
+};
+function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2),
+    view = new DataView(buffer),
+    write = (offset: number, value: string) => {
+      for (let index = 0; index < value.length; index += 1)
+        view.setUint8(offset + index, value.charCodeAt(index));
+    };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    view.setInt16(
+      44 + index * 2,
+      sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+      true,
+    );
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+const paths: Record<string, string> = {
+  create: "M12 3v18M3 12h18",
+  library: "M4 5v14M9 5v14M14 7v12M19 4v15",
+  voice:
+    "M12 2a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4Zm-7 10a7 7 0 0 0 14 0M12 19v3M8 22h8",
+  play: "m9 7 8 5-8 5V7Z",
+  pause: "M9 7v10M15 7v10",
+  heart:
+    "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l8.9 8.6 8.8-8.6a5.5 5.5 0 0 0 1.1-8.9Z",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  spark: "m12 3-1.4 4.2L7 9l3.6 1.8L12 15l1.4-4.2L17 9l-3.6-1.8L12 3Z",
+  search: "m21 21-4.3-4.3M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
+  skip: "m6 6 8 6-8 6V6Zm10 0v12",
+  volume: "M11 5 6 9H2v6h4l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7",
+  chevron: "m9 18 6-6-6-6",
+  download: "M12 3v12m0 0 4-4m-4 4-4-4M5 21h14",
+};
+const labels: Record<Status, string> = {
+  QUEUED: "Queued",
+  PREPARING: "Preparing composition",
+  GENERATING: "Generating audio",
+  POST_PROCESSING: "Analyzing mix",
+  UPLOADING: "Saving master",
+  COMPLETE: "Ready",
+  FAILED: "Generation failed",
+  CANCELLED: "Cancelled",
+};
+function Icon({ name }: { name: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d={paths[name]} />
+    </svg>
+  );
+}
+function Wave({
+  data,
+  progress = 0,
+  compact = false,
+  onSeek,
+}: {
+  data: number[];
+  progress?: number;
+  compact?: boolean;
+  onSeek?: (n: number) => void;
+}) {
+  return (
+    <button
+      className={`waveform ${compact ? "compact" : ""}`}
+      aria-label="Seek in song"
+      onClick={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        onSeek?.((e.clientX - r.left) / r.width);
+      }}
+    >
+      {data.map((p, i) => (
+        <i
+          key={i}
+          className={i / data.length <= progress ? "played" : ""}
+          style={{ height: `${Math.max(10, p * 100).toFixed(2)}%` }}
+        />
+      ))}
+    </button>
+  );
 }
 
-export default function StudioApp(){
- const[user,setUser]=useState<User|null|undefined>(undefined),[provider,setProvider]=useState<ProviderStatus>({name:"provider",model:"",available:false,masterGeneration:"UNAVAILABLE"}),[view,setView]=useState<"create"|"library">("create"),[mode,setMode]=useState<"Simple"|"Advanced">("Simple"),[prompt,setPrompt]=useState("Warm neo-soul song about finding purpose later in life"),[instrumental,setInstrumental]=useState(false),[lyrics,setLyrics]=useState(""),[durationSeconds,setDurationSeconds]=useState(12),[providerPolicyAccepted,setProviderPolicyAccepted]=useState(false),[songs,setSongs]=useState<Song[]>([]),[active,setActive]=useState<Song|null>(null),[playing,setPlaying]=useState(false),[time,setTime]=useState(0),[search,setSearch]=useState(""),[blueprint,setBlueprint]=useState(true),[submitting,setSubmitting]=useState(false),[notice,setNotice]=useState("");
- const audio=useRef<HTMLAudioElement|null>(null),plan=useMemo(()=>({genre:prompt.toLowerCase().includes("soul")?"Neo-soul":"Alternative pop",bpm:prompt.toLowerCase().includes("slow")?68:76,key:"F♯ minor",mood:prompt.toLowerCase().includes("warm")?"Warm · Reflective":"Intimate · Hopeful"}),[prompt]);
- const loadSongs=useCallback(async()=>{const res=await fetch("/api/generations",{cache:"no-store"});if(res.ok){const data=await res.json() as {songs:Song[]};setSongs(data.songs)}},[]);
- useEffect(()=>{fetch("/api/auth/session").then(async r=>await r.json() as {user:User|null}).then(async d=>{setUser(d.user);if(d.user)await loadSongs()}).catch(()=>setUser(null))},[loadSongs]);
- useEffect(()=>{fetch("/api/providers",{cache:"no-store"}).then(async r=>await r.json() as {providers:Array<{name:string;model:string;health:{available:boolean};capabilities:{masterGeneration:string}}>}).then(d=>{const p=d.providers[0];if(p)setProvider({name:p.name,model:p.model,available:p.health.available,masterGeneration:p.capabilities.masterGeneration})}).catch(()=>setProvider({name:"provider",model:"",available:false,masterGeneration:"UNAVAILABLE"}))},[]);
- useEffect(()=>{const pending=songs.filter(s=>!["COMPLETE","FAILED","CANCELLED"].includes(s.status));if(!pending.length)return;const timer=setInterval(async()=>{const updates=await Promise.all(pending.map(async s=>(await fetch(`/api/generations/${s.id}`,{cache:"no-store"}).then(r=>r.json()) as {song:Song}).song));setSongs(current=>current.map(s=>updates.find(u=>u.id===s.id)||s))},1000);return()=>clearInterval(timer)},[songs]);
- useEffect(()=>{const el=audio.current;if(!el)return;if(playing){void el.play().catch(()=>setPlaying(false))}else{el.pause()}},[playing,active]);
- const fmt=(n:number)=>`${Math.floor(n/60)}:${Math.floor(n%60).toString().padStart(2,"0")}`;
- function play(song:Song){if(!song.audioUrl)return;if(active?.id===song.id)setPlaying(v=>!v);else{setActive(song);setTime(0);setPlaying(true)}}
- async function generate(){if(!prompt.trim()||submitting||(provider.name==="elevenlabs"&&!providerPolicyAccepted))return;setSubmitting(true);setNotice("");try{const res=await fetch("/api/generations",{method:"POST",headers:{"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({prompt,lyrics,instrumental,genre:plan.genre,bpm:plan.bpm,key:"F#",durationSeconds,providerPolicyAccepted})}),data=await res.json() as {song?:Song;error?:{message:string}};if(!res.ok||!data.song)throw new Error(data.error?.message||"Generation could not start.");setSongs(x=>[data.song as Song,...x])}catch(err){setNotice(err instanceof Error?err.message:"Generation could not start.")}finally{setSubmitting(false)}}
- async function logout(){await fetch("/api/auth/logout",{method:"POST"});setUser(null);setSongs([]);setActive(null);setPlaying(false)}
- if(user===undefined)return <div className="boot"><span>dz</span><p>Opening your studio…</p></div>;if(!user)return <AuthGate onAuthenticated={setUser}/>;
- const filtered=songs.filter(s=>(s.title+s.prompt).toLowerCase().includes(search.toLowerCase()));
- return <div className="app-shell"><aside className="rail"><div className="brand"><span>dz</span></div><nav aria-label="Main navigation"><button className={view==="create"?"active":""} onClick={()=>setView("create")}><Icon name="create"/><span>Create</span></button><button className={view==="library"?"active":""} onClick={()=>setView("library")}><Icon name="library"/><span>Library</span></button></nav><div className="rail-bottom"><button className="avatar" aria-label="Sign out" title={`Sign out ${user.email}`} onClick={logout}>{user.displayName.slice(0,2).toUpperCase()}</button></div></aside><main><header className="topbar"><div><p>DOZI MUSIC STUDIO</p><h1>{view==="create"?"Create":"Your library"}</h1></div><div className="provider" title={provider.model}><i/>{provider.name==="elevenlabs"?"Powered by ElevenLabs":provider.name==="acestep"?"ACE-Step":provider.name==="mock"?"Mock engine":provider.name} <span>{provider.available?`Server ready · ${provider.masterGeneration.toLowerCase()}`:"Unavailable"}</span></div></header>
- {view==="create"?<div className="workspace"><section className="composer"><div className="mode-tabs">{(["Simple","Advanced"] as const).map(m=><button key={m} className={mode===m?"active":""} onClick={()=>setMode(m)}>{m}</button>)}</div><label className="field-label" htmlFor="idea">SONG IDEA <span>{prompt.length}/500</span></label><textarea id="idea" value={prompt} maxLength={500} onChange={e=>setPrompt(e.target.value)} placeholder="Describe the song you want to make…"/><div className="toggle-row"><div><strong>Instrumental</strong><small>Create without vocals</small></div><button role="switch" aria-checked={instrumental} className={`switch ${instrumental?"on":""}`} onClick={()=>setInstrumental(v=>!v)}><i/></button></div>{!instrumental&&<><div className="section-head"><span>LYRICS</span><button onClick={()=>setLyrics("[Verse 1]\nThe road got quiet, but I kept the light\n\n[Chorus]\nPurpose finds us in its own sweet time")}>Generate for me <Icon name="spark"/></button></div><textarea className="lyrics" value={lyrics} onChange={e=>setLyrics(e.target.value)} placeholder="Leave blank and Dozi will write lyrics, or add your own…"/></>}{mode==="Advanced"&&<div className="advanced-grid"><label>Genre<input value={plan.genre} readOnly/></label><label>BPM<input type="number" value={plan.bpm} readOnly/></label><label>Key<select defaultValue="F♯"><option>F♯</option><option>D</option><option>A</option></select></label><label>Duration<select value={durationSeconds} onChange={e=>setDurationSeconds(Number(e.target.value))}><option value={12}>12 seconds</option>{["elevenlabs","minimax"].includes(provider.name)&&<option value={30}>30 seconds</option>}</select></label></div>}<button className="blueprint-toggle" onClick={()=>setBlueprint(v=>!v)}><span><Icon name="spark"/> Song Blueprint</span><Icon name="chevron"/></button>{blueprint&&<div className="blueprint"><div><small>STYLE</small><strong>{plan.genre}</strong></div><div><small>TEMPO</small><strong>{plan.bpm} BPM</strong></div><div><small>TONALITY</small><strong>{plan.key}</strong></div><div><small>FEEL</small><strong>{plan.mood}</strong></div><p><i/>Sparse Rhodes and restrained pocket drums leave room for the final chorus to open up.</p></div>}{provider.name==="elevenlabs"&&<label className="provider-policy"><input type="checkbox" checked={providerPolicyAccepted} onChange={e=>setProviderPolicyAccepted(e.target.checked)}/><span><strong>Rights confirmation</strong><small>I have rights to this prompt and its lyrics. They will be sent to ElevenLabs for generation. Artist imitation and copyrighted lyrics are not permitted.</small></span></label>}<button className="generate" onClick={generate} disabled={!prompt.trim()||submitting||(provider.name==="elevenlabs"&&!providerPolicyAccepted)}><Icon name="spark"/> {submitting?"Starting…":"Generate"}<kbd>⌘ ↵</kbd></button>{notice?<p className="form-notice" role="alert">{notice}</p>:<p className="fineprint">Creates a server-side {provider.name==="elevenlabs"?"MP3":"WAV"} master · {provider.name==="acestep"?"ACE-Step":provider.name}</p>}</section>
- <section className="results"><div className="results-head"><div><h2>Generations</h2><span>{songs.length} songs</span></div><button onClick={loadSongs}>Refresh</button></div><div className="result-list">{songs.length===0?<div className="empty"><Icon name="spark"/><h3>Your next sound starts here</h3><p>Describe a song and generate your first durable version.</p></div>:songs.map((s,i)=><SongCard key={s.id} song={s} tone={i%3} active={active} playing={playing} time={time} onPlay={play} onSeek={p=>{setActive(s);setTime(p*s.duration);if(audio.current)audio.current.currentTime=p*s.duration}}/>)}</div></section></div>
- :<section className="library-view"><div className="library-tools"><div className="search"><Icon name="search"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search songs and prompts"/></div><select aria-label="Sort library"><option>Newest first</option><option>Oldest first</option></select></div>{filtered.length?<div className="library-grid">{filtered.map((s,i)=><article key={s.id}><div className="library-cover" data-tone={i%3}><button disabled={!s.audioUrl} onClick={()=>play(s)} aria-label={`Play ${s.title}`}><Icon name={active?.id===s.id&&playing?"pause":"play"}/></button><span>DZ</span></div><h3>{s.title}</h3><p>{s.genre} · V{s.version}</p><small>{new Date(s.createdAt).toLocaleString()}</small></article>)}</div>:<div className="empty"><h3>No songs found</h3><p>Try another search or create your first song.</p></div>}</section>}</main>
- <footer className={`player ${active?"visible":""}`}>{/* Music is instrumental/generated; captions are not applicable. */}<audio ref={audio} src={active?.audioUrl} onTimeUpdate={e=>setTime(e.currentTarget.currentTime)} onEnded={()=>setPlaying(false)}/><div className="now"><div className="mini-cover">DZ</div><div><strong>{active?.title||"Choose a song"}</strong><span>{active?`${active.genre} · Version ${active.version}`:"Nothing playing"}</span></div></div><div className="transport"><div><button aria-label="Previous"><Icon name="skip"/></button><button className="main-play" aria-label={playing?"Pause":"Play"} onClick={()=>active&&setPlaying(v=>!v)}><Icon name={playing?"pause":"play"}/></button><button aria-label="Next"><Icon name="skip"/></button></div>{active&&<div className="timeline"><span>{fmt(time)}</span><Wave compact data={active.waveform} progress={time/active.duration} onSeek={p=>{setTime(p*active.duration);if(audio.current)audio.current.currentTime=p*active.duration}}/><span>{fmt(active.duration)}</span></div>}</div><div className="volume"><Icon name="volume"/><input aria-label="Volume" type="range" min="0" max="1" step=".05" defaultValue=".8" onChange={e=>{if(audio.current)audio.current.volume=Number(e.target.value)}}/></div></footer></div>
+function AuthGate({ onAuthenticated }: { onAuthenticated: (u: User) => void }) {
+  const [register, setRegister] = useState(true),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(e.currentTarget),
+      body = {
+        displayName: String(form.get("displayName") || ""),
+        email: String(form.get("email") || ""),
+        password: String(form.get("password") || ""),
+      };
+    try {
+      const res = await fetch(`/api/auth/${register ? "register" : "login"}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        data = (await res.json()) as {
+          user?: User;
+          error?: { message: string };
+        };
+      if (!res.ok || !data.user)
+        throw new Error(data.error?.message || "Could not sign in.");
+      onAuthenticated(data.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="auth-screen">
+      <section>
+        <div className="auth-brand">
+          <span>dz</span>
+          <p>DOZI MUSIC STUDIO</p>
+        </div>
+        <h1>{register ? "Create your studio" : "Welcome back"}</h1>
+        <p>
+          Your songs, versions, and masters stay attached to your private Dozi
+          account—never a ChatGPT login.
+        </p>
+        <form onSubmit={submit}>
+          {register && (
+            <label>
+              Display name
+              <input
+                name="displayName"
+                autoComplete="name"
+                required
+                maxLength={80}
+              />
+            </label>
+          )}
+          <label>
+            Email
+            <input name="email" type="email" autoComplete="email" required />
+          </label>
+          <label>
+            Password
+            <input
+              name="password"
+              type="password"
+              autoComplete={register ? "new-password" : "current-password"}
+              required
+              minLength={10}
+            />
+          </label>
+          {error && (
+            <div className="auth-error" role="alert">
+              {error}
+            </div>
+          )}
+          <button className="generate" disabled={busy}>
+            {busy ? "Please wait…" : register ? "Create account" : "Sign in"}
+          </button>
+        </form>
+        <button
+          className="auth-switch"
+          onClick={() => {
+            setRegister((v) => !v);
+            setError("");
+          }}
+        >
+          {register
+            ? "Already have an account? Sign in"
+            : "New to Dozi? Create an account"}
+        </button>
+      </section>
+    </div>
+  );
 }
 
-function SongCard({song:s,tone,active,playing,time,onPlay,onSeek}:{song:Song;tone:number;active:Song|null;playing:boolean;time:number;onPlay:(s:Song)=>void;onSeek:(p:number)=>void}){const fmt=(n:number)=>`${Math.floor(n/60)}:${Math.floor(n%60).toString().padStart(2,"0")}`,extension=s.provider==="elevenlabs"?"mp3":"wav";return <article className="song-card"><div className="cover" data-tone={tone}><span>{s.status==="COMPLETE"?"DZ":s.progress+"%"}</span></div><div className="song-body"><div className="song-title"><div><h3>{s.title}</h3><p>{s.genre} · {s.bpm} BPM · {s.musicalKey}</p></div><div className="song-actions"><button aria-label="Favorite"><Icon name="heart"/></button>{s.audioUrl&&<a href={s.audioUrl} download={`${s.title}.${extension}`} aria-label={`Download ${extension.toUpperCase()}`}><Icon name="download"/></a>}<button aria-label="More"><Icon name="more"/></button></div></div>{s.status==="COMPLETE"?<Wave data={s.waveform} progress={active?.id===s.id?time/s.duration:0} onSeek={onSeek}/>:<div className="job-progress"><div><i style={{width:`${s.progress}%`}}/></div><span>{s.status==="FAILED"&&s.errorMessage?s.errorMessage:labels[s.status]}</span></div>}<div className="song-foot"><button className="play" disabled={s.status!=="COMPLETE"||!s.audioUrl} onClick={()=>onPlay(s)}><Icon name={active?.id===s.id&&playing?"pause":"play"}/></button><span>V{s.version}</span><span>{fmt(s.duration)}</span><span>Seed {s.seed}</span><button className="remix" disabled>Remix</button></div></div></article>}
+export default function StudioApp() {
+  const [user, setUser] = useState<User | null | undefined>(undefined),
+    [provider, setProvider] = useState<ProviderStatus>({
+      name: "provider",
+      model: "",
+      available: false,
+      masterGeneration: "UNAVAILABLE",
+    }),
+    [view, setView] = useState<"create" | "library" | "voice">("create"),
+    [mode, setMode] = useState<"Simple" | "Advanced">("Simple"),
+    [prompt, setPrompt] = useState(
+      "Warm neo-soul song about finding purpose later in life",
+    ),
+    [instrumental, setInstrumental] = useState(false),
+    [lyrics, setLyrics] = useState(""),
+    [durationSeconds, setDurationSeconds] = useState(12),
+    [providerPolicyAccepted, setProviderPolicyAccepted] = useState(false),
+    [songs, setSongs] = useState<Song[]>([]),
+    [profiles, setProfiles] = useState<VocalProfile[]>([]),
+    [profileName, setProfileName] = useState("My Voice"),
+    [profileBusy, setProfileBusy] = useState(false),
+    [profileNotice, setProfileNotice] = useState(""),
+    [profileError, setProfileError] = useState(""),
+    [analysisProgress, setAnalysisProgress] = useState<{
+      profileId: string;
+      processed: number;
+      total: number;
+      running: boolean;
+    } | null>(null),
+    [importProgress, setImportProgress] = useState<{
+      profileId: string;
+      fileName: string;
+      stage: "READING" | "UPLOADING" | "SAVED" | "FAILED";
+      message: string;
+    } | null>(null),
+    [voiceConsent, setVoiceConsent] = useState(false),
+    [challenge, setChallenge] = useState<VocalChallenge | null>(null),
+    [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]),
+    [selectedInputId, setSelectedInputId] = useState(""),
+    [selectedInputChannel, setSelectedInputChannel] = useState(1),
+    [meterLevel, setMeterLevel] = useState(0),
+    [monitoring, setMonitoring] = useState(false),
+    [preview, setPreview] = useState<VocalPreview | null>(null),
+    [recording, setRecording] = useState(false),
+    [recordingKind, setRecordingKind] = useState<"identity" | "singing" | null>(
+      null,
+    ),
+    [recordingSeconds, setRecordingSeconds] = useState(0),
+    [active, setActive] = useState<Song | null>(null),
+    [repairSong, setRepairSong] = useState<Song | null>(null),
+    [repairImportOpen, setRepairImportOpen] = useState(false),
+    [playing, setPlaying] = useState(false),
+    [time, setTime] = useState(0),
+    [search, setSearch] = useState(""),
+    [blueprint, setBlueprint] = useState(true),
+    [submitting, setSubmitting] = useState(false),
+    [notice, setNotice] = useState("");
+  const audio = useRef<HTMLAudioElement | null>(null),
+    recorder = useRef<MediaRecorder | null>(null),
+    recordingChunks = useRef<Blob[]>([]),
+    recordingElapsed = useRef(0),
+    recordingTimer = useRef<ReturnType<typeof setInterval> | null>(null),
+    recordingTargetProfile = useRef<string | null>(null),
+    monitorStream = useRef<MediaStream | null>(null),
+    monitorSourceStream = useRef<MediaStream | null>(null),
+    monitorContext = useRef<AudioContext | null>(null),
+    monitorFrame = useRef<number | null>(null),
+    plan = useMemo(
+      () => ({
+        genre: prompt.toLowerCase().includes("soul")
+          ? "Neo-soul"
+          : "Alternative pop",
+        bpm: prompt.toLowerCase().includes("slow") ? 68 : 76,
+        key: "F♯ minor",
+        mood: prompt.toLowerCase().includes("warm")
+          ? "Warm · Reflective"
+          : "Intimate · Hopeful",
+      }),
+      [prompt],
+    );
+  const loadSongs = useCallback(async () => {
+    const res = await fetch("/api/generations", { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as { songs: Song[] };
+      setSongs(data.songs);
+    }
+  }, []);
+  const loadProfiles = useCallback(async () => {
+    const res = await fetch("/api/vocal-profiles", { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as { profiles: VocalProfile[] };
+      setProfiles(data.profiles);
+    }
+  }, []);
+  const stopMonitoring = useCallback(() => {
+    if (monitorFrame.current !== null)
+      cancelAnimationFrame(monitorFrame.current);
+    monitorFrame.current = null;
+    monitorStream.current?.getTracks().forEach((track) => track.stop());
+    monitorStream.current = null;
+    monitorSourceStream.current?.getTracks().forEach((track) => track.stop());
+    monitorSourceStream.current = null;
+    if (monitorContext.current) void monitorContext.current.close();
+    monitorContext.current = null;
+    setMonitoring(false);
+    setMeterLevel(0);
+  }, []);
+  useEffect(() => {
+    fetch("/api/auth/session")
+      .then(async (r) => (await r.json()) as { user: User | null })
+      .then(async (d) => {
+        setUser(d.user);
+        if (d.user) await loadSongs();
+      })
+      .catch(() => setUser(null));
+  }, [loadSongs]);
+  useEffect(() => {
+    fetch("/api/providers", { cache: "no-store" })
+      .then(
+        async (r) =>
+          (await r.json()) as {
+            providers: Array<{
+              name: string;
+              model: string;
+              health: { available: boolean };
+              capabilities: { masterGeneration: string };
+            }>;
+          },
+      )
+      .then((d) => {
+        const p = d.providers[0];
+        if (p)
+          setProvider({
+            name: p.name,
+            model: p.model,
+            available: p.health.available,
+            masterGeneration: p.capabilities.masterGeneration,
+          });
+      })
+      .catch(() =>
+        setProvider({
+          name: "provider",
+          model: "",
+          available: false,
+          masterGeneration: "UNAVAILABLE",
+        }),
+      );
+  }, []);
+  useEffect(() => {
+    const pending = songs.filter(
+      (s) => !["COMPLETE", "FAILED", "CANCELLED"].includes(s.status),
+    );
+    if (!pending.length) return;
+    const timer = setInterval(async () => {
+      const updates = await Promise.all(
+        pending.map(
+          async (s) =>
+            (
+              (await fetch(`/api/generations/${s.id}`, {
+                cache: "no-store",
+              }).then((r) => r.json())) as { song: Song }
+            ).song,
+        ),
+      );
+      setSongs((current) =>
+        current.map((s) => updates.find((u) => u.id === s.id) || s),
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [songs]);
+  useEffect(() => {
+    const el = audio.current;
+    if (!el) return;
+    if (playing) {
+      void el.play().catch(() => setPlaying(false));
+    } else {
+      el.pause();
+    }
+  }, [playing, active]);
+  useEffect(() => () => stopMonitoring(), [stopMonitoring]);
+  const fmt = (n: number) =>
+    `${Math.floor(n / 60)}:${Math.floor(n % 60)
+      .toString()
+      .padStart(2, "0")}`;
+  function play(song: Song) {
+    if (!song.audioUrl) return;
+    if (active?.id === song.id) setPlaying((v) => !v);
+    else {
+      setActive(song);
+      setTime(0);
+      setPlaying(true);
+    }
+  }
+  async function generate() {
+    if (
+      !prompt.trim() ||
+      submitting ||
+      (provider.name === "elevenlabs" && !providerPolicyAccepted)
+    )
+      return;
+    setSubmitting(true);
+    setNotice("");
+    try {
+      const res = await fetch("/api/generations", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({
+            prompt,
+            lyrics,
+            instrumental,
+            genre: plan.genre,
+            bpm: plan.bpm,
+            key: "F#",
+            durationSeconds,
+            providerPolicyAccepted,
+          }),
+        }),
+        data = (await res.json()) as {
+          song?: Song;
+          error?: { message: string };
+        };
+      if (!res.ok || !data.song)
+        throw new Error(data.error?.message || "Generation could not start.");
+      setSongs((x) => [data.song as Song, ...x]);
+    } catch (err) {
+      setNotice(
+        err instanceof Error ? err.message : "Generation could not start.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setSongs([]);
+    setActive(null);
+    setPlaying(false);
+  }
+  async function createProfile(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setProfileBusy(true);
+    setProfileNotice("");
+    try {
+      const res = await fetch("/api/vocal-profiles", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: profileName }),
+        }),
+        data = (await res.json()) as {
+          profile?: VocalProfile;
+          error?: { message: string };
+        };
+      if (!res.ok || !data.profile)
+        throw new Error(data.error?.message || "Could not create the profile.");
+      setProfiles((p) => [data.profile as VocalProfile, ...p]);
+      setProfileName("");
+      setProfileNotice(
+        "Private profile created. Recording enrollment is the next step.",
+      );
+    } catch (err) {
+      setProfileNotice(
+        err instanceof Error ? err.message : "Could not create the profile.",
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+  async function setupMicrophone(
+    deviceId = selectedInputId,
+    inputChannel = selectedInputChannel,
+  ) {
+    stopMonitoring();
+    setProfileNotice("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId
+            ? {
+                deviceId: { exact: deviceId },
+                channelCount: { ideal: 2 },
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              }
+            : {
+                channelCount: { ideal: 2 },
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              },
+        }),
+        devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+          (device) => device.kind === "audioinput",
+        ),
+        activeDevice = stream.getAudioTracks()[0]?.getSettings().deviceId || "",
+        context = new AudioContext(),
+        source = context.createMediaStreamSource(stream),
+        splitter = context.createChannelSplitter(2),
+        merger = context.createChannelMerger(2),
+        destination = context.createMediaStreamDestination(),
+        analyser = context.createAnalyser(),
+        samples = new Uint8Array(analyser.fftSize);
+      source.connect(splitter);
+      splitter.connect(merger, inputChannel - 1, 0);
+      splitter.connect(merger, inputChannel - 1, 1);
+      splitter.connect(analyser, inputChannel - 1);
+      merger.connect(destination);
+      monitorSourceStream.current = stream;
+      monitorStream.current = destination.stream;
+      monitorContext.current = context;
+      setAudioInputs(devices);
+      setSelectedInputId(
+        activeDevice || deviceId || devices[0]?.deviceId || "",
+      );
+      setMonitoring(true);
+      const updateMeter = () => {
+        analyser.getByteTimeDomainData(samples);
+        let energy = 0;
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          energy += normalized * normalized;
+        }
+        setMeterLevel(Math.min(100, Math.sqrt(energy / samples.length) * 240));
+        monitorFrame.current = requestAnimationFrame(updateMeter);
+      };
+      updateMeter();
+    } catch {
+      setProfileNotice(
+        "Microphone setup failed. Allow microphone access, confirm the Apollo is connected, and try again.",
+      );
+    }
+  }
+  async function beginEnrollment(profileId: string) {
+    if (!voiceConsent || profileBusy) return;
+    setProfileBusy(true);
+    setProfileNotice("");
+    try {
+      const res = await fetch(`/api/vocal-profiles/${profileId}/challenge`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ rightsAttested: true, consentAccepted: true }),
+        }),
+        data = (await res.json()) as {
+          challenge?: Omit<VocalChallenge, "profileId">;
+          error?: { message: string };
+        };
+      if (!res.ok || !data.challenge)
+        throw new Error(data.error?.message || "Could not begin enrollment.");
+      setChallenge({ ...data.challenge, profileId });
+      await loadProfiles();
+    } catch (err) {
+      setProfileNotice(
+        err instanceof Error ? err.message : "Could not begin enrollment.",
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+  async function uploadIdentityRecording(
+    blob: Blob,
+    duration: number,
+    channelCount: number,
+  ) {
+    if (!challenge) return;
+    setProfileBusy(true);
+    try {
+      const form = new FormData();
+      form.set(
+        "audio",
+        new File(
+          [blob],
+          `identity-${challenge.verificationId}.${blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm"}`,
+          { type: blob.type },
+        ),
+      );
+      form.set("challengeToken", challenge.challengeToken);
+      form.set("phrase", challenge.phrase);
+      form.set("durationSeconds", String(duration));
+      form.set("channelCount", String(channelCount));
+      const res = await fetch(
+          `/api/vocal-profiles/${challenge.profileId}/challenge/${challenge.verificationId}/recording`,
+          { method: "POST", body: form },
+        ),
+        data = (await res.json()) as {
+          verification?: {
+            status: string;
+            phraseMatchScore?: number;
+            reasons?: string[];
+          };
+          error?: { message: string };
+        };
+      if (!res.ok || !data.verification)
+        throw new Error(data.error?.message || "Could not save the recording.");
+      setProfileNotice(
+        data.verification.status === "PASSED"
+          ? `Identity phrase verified locally · ${Math.round((data.verification.phraseMatchScore || 0) * 100)}% phrase match.`
+          : `Identity verification did not pass${data.verification.reasons?.length ? `: ${data.verification.reasons.join(", ").toLowerCase().replaceAll("_", " ")}` : "."}`,
+      );
+      setChallenge(null);
+      await loadProfiles();
+    } catch (err) {
+      setProfileNotice(
+        err instanceof Error ? err.message : "Could not save the recording.",
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+  async function uploadSingingRecording(
+    blob: Blob,
+    duration: number,
+    profileId: string,
+    channelCount: number,
+    sourceType: "LIVE_SINGING" | "OWNED_VOCAL_BOUNCE" = "LIVE_SINGING",
+    originalFilename?: string,
+    refreshProfiles = true,
+  ) {
+    setProfileBusy(true);
+    try {
+      const extension = blob.type.includes("mp4")
+          ? "m4a"
+          : blob.type.includes("ogg")
+            ? "ogg"
+            : "webm",
+        form = new FormData();
+      form.set(
+        "audio",
+        new File([blob], originalFilename || `guided-singing.${extension}`, {
+          type: blob.type,
+        }),
+      );
+      form.set("durationSeconds", String(duration));
+      form.set("channelCount", String(channelCount));
+      form.set("sourceType", sourceType);
+      const res = await fetch(
+          `/api/vocal-profiles/${profileId}/singing-sources`,
+          { method: "POST", body: form },
+        ),
+        responseText = await res.text();
+      let data: {
+          source?: { analysisStatus: string };
+          error?: { message: string };
+        } = {};
+      try {
+        data = JSON.parse(responseText) as typeof data;
+      } catch {
+        if (!res.ok)
+          throw new Error(
+            res.status === 413
+              ? "One import segment exceeded the server upload limit."
+              : responseText || `Upload failed (${res.status}).`,
+          );
+      }
+      if (!res.ok || !data.source)
+        throw new Error(
+          data.error?.message || "Could not save the singing sample.",
+        );
+      setProfileNotice(
+        sourceType === "OWNED_VOCAL_BOUNCE"
+          ? "Vocal file imported privately. Audio quality, range, and usable duration analysis are pending."
+          : "Guided singing saved privately. Audio quality, range, and usable duration analysis are pending.",
+      );
+      if (refreshProfiles) await loadProfiles();
+      return true;
+    } catch (err) {
+      setProfileNotice(
+        err instanceof Error
+          ? err.message
+          : "Could not save the singing sample.",
+      );
+      return false;
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+  async function importVocalFile(profileId: string, file: File) {
+    if (!voiceConsent) {
+      setProfileNotice(
+        "Confirm that you own or control this vocal recording before importing it.",
+      );
+      return;
+    }
+    setImportProgress({
+      profileId,
+      fileName: file.name,
+      stage: "READING",
+      message: "Reading audio and checking duration and channels…",
+    });
+    setProfileBusy(true);
+    try {
+      const mimeByExtension: Record<string, string> = {
+          wav: "audio/wav",
+          flac: "audio/flac",
+          mp3: "audio/mpeg",
+          m4a: "audio/mp4",
+          mp4: "audio/mp4",
+          ogg: "audio/ogg",
+          webm: "audio/webm",
+        },
+        extension = file.name.split(".").pop()?.toLowerCase() || "",
+        typedFile = file.type
+          ? file
+          : new File([file], file.name, {
+              type: mimeByExtension[extension] || "application/octet-stream",
+            }),
+        context = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(await typedFile.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      if (decoded.duration < 15 || decoded.duration > 1200)
+        throw new Error("Choose a vocal file between 15 seconds and 20 minutes.");
+      if (decoded.numberOfChannels < 1 || decoded.numberOfChannels > 2)
+        throw new Error("Choose a mono or stereo vocal file.");
+      const targetRate = 48000,
+        offline = new OfflineAudioContext(
+          1,
+          Math.ceil(decoded.duration * targetRate),
+          targetRate,
+        ),
+        source = offline.createBufferSource();
+      source.buffer = decoded;
+      source.connect(offline.destination);
+      source.start();
+      const rendered = await offline.startRendering(),
+        samples = rendered.getChannelData(0),
+        targetChunkSeconds = 8,
+        chunkCount = Math.ceil(decoded.duration / targetChunkSeconds),
+        samplesPerChunk = Math.ceil(samples.length / chunkCount),
+        baseName = file.name.replace(/\.[^.]+$/, "") || "vocal";
+      let saved = true;
+      for (let part = 0; part < chunkCount; part += 1) {
+        const start = part * samplesPerChunk,
+          end = Math.min(samples.length, start + samplesPerChunk),
+          partSamples = samples.slice(start, end),
+          partBlob = encodeMonoPcm16Wav(partSamples, targetRate),
+          partDuration = partSamples.length / targetRate,
+          partName = `${baseName}.part-${String(part + 1).padStart(2, "0")}-of-${String(chunkCount).padStart(2, "0")}.wav`;
+        setImportProgress({
+          profileId,
+          fileName: file.name,
+          stage: "UPLOADING",
+          message: `Uploading part ${part + 1} of ${chunkCount} securely (${Math.ceil(partBlob.size / 1024 / 1024)} MB)…`,
+        });
+        const partSaved = await uploadSingingRecording(
+          partBlob,
+          partDuration,
+          profileId,
+          1,
+          "OWNED_VOCAL_BOUNCE",
+          partName,
+          false,
+        );
+        if (!partSaved) {
+          saved = false;
+          break;
+        }
+      }
+      await loadProfiles();
+      setImportProgress({
+        profileId,
+        fileName: file.name,
+        stage: saved ? "SAVED" : "FAILED",
+        message: saved
+          ? `Import complete · ${chunkCount} parts saved. Ready for vocal analysis.`
+          : "Import failed. See the message above and try again.",
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not import the vocal file.";
+      setProfileNotice(
+        message,
+      );
+      setImportProgress({
+        profileId,
+        fileName: file.name,
+        stage: "FAILED",
+        message,
+      });
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+  async function analyzeProfile(profileId: string) {
+    setProfileError("");
+    setProfileBusy(true);
+    setProfileNotice("Analyzing saved vocal recordings…");
+    setAnalysisProgress({
+      profileId,
+      processed: 0,
+      total: 0,
+      running: true,
+    });
+    try {
+      let processed = 0,
+        passed = 0,
+        total = 0,
+        usableSeconds = 0;
+      while (true) {
+        const response = await fetch(`/api/vocal-profiles/${profileId}/analyze`, {
+          method: "POST",
+        }),
+          data = (await response.json()) as {
+            results?: Array<{ passed: boolean }>;
+            pendingBefore?: number;
+            pendingRemaining?: number;
+            usableSingingSeconds?: number;
+            error?: { message: string };
+          };
+        if (!response.ok || !data.results)
+          throw new Error(data.error?.message || "Vocal analysis failed.");
+        if (!total) total = processed + (data.pendingBefore || 0);
+        if (total === 0 && data.results.length === 0) {
+          setAnalysisProgress(null);
+          break;
+        }
+        processed += data.results.length;
+        passed += data.results.filter((result) => result.passed).length;
+        usableSeconds = data.usableSingingSeconds || 0;
+        setAnalysisProgress({
+          profileId,
+          processed,
+          total,
+          running: (data.pendingRemaining || 0) > 0,
+        });
+        if (!data.pendingRemaining || data.results.length === 0) break;
+      }
+      setProfileNotice(
+        total
+          ? `${passed} of ${total} pending takes passed. ${Math.round(usableSeconds)}s of singing is usable.`
+          : "No pending vocal takes remain to analyze.",
+      );
+      await loadProfiles();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Vocal analysis failed.";
+      setProfileNotice(message);
+      setProfileError(message);
+    } finally {
+      setProfileBusy(false);
+      setAnalysisProgress((progress) =>
+        progress ? { ...progress, running: false } : null,
+      );
+    }
+  }
+  function discardPreview() {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+    setProfileNotice("Take discarded. Nothing was uploaded.");
+  }
+  async function keepPreview() {
+    if (!preview) return;
+    const take = preview;
+    setPreview(null);
+    URL.revokeObjectURL(take.url);
+    if (take.kind === "identity")
+      await uploadIdentityRecording(
+        take.blob,
+        take.duration,
+        take.channelCount,
+      );
+    else
+      await uploadSingingRecording(
+        take.blob,
+        take.duration,
+        take.profileId,
+        take.channelCount,
+      );
+  }
+  async function startRecording(
+    kind: "identity" | "singing" = "identity",
+    profileId?: string,
+  ) {
+    if (
+      recording ||
+      (kind === "identity" && !challenge) ||
+      (kind === "singing" && !profileId)
+    )
+      return;
+    setProfileNotice("");
+    try {
+      if (!monitorStream.current) await setupMicrophone();
+      if (!monitorStream.current)
+        throw new Error("Set up the microphone before recording.");
+      const stream = monitorStream.current.clone(),
+        mimeType =
+          ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(
+            (type) => MediaRecorder.isTypeSupported(type),
+          ) || "",
+        mediaRecorder = new MediaRecorder(
+          stream,
+          mimeType ? { mimeType } : undefined,
+        ),
+        maximumSeconds = kind === "identity" ? 15 : 60;
+      recordingChunks.current = [];
+      recordingElapsed.current = 0;
+      recordingTargetProfile.current =
+        profileId || challenge?.profileId || null;
+      setRecordingKind(kind);
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size) recordingChunks.current.push(event.data);
+      };
+      mediaRecorder.onstop = () => {
+        const duration = recordingElapsed.current,
+          blob = new Blob(recordingChunks.current, {
+            type: mediaRecorder.mimeType || "audio/webm",
+          }),
+          targetProfile = recordingTargetProfile.current,
+          channelCount = Math.max(
+            1,
+            Math.min(
+              2,
+              Number(stream.getAudioTracks()[0]?.getSettings().channelCount) ||
+                1,
+            ),
+          );
+        stream.getTracks().forEach((track) => track.stop());
+        if (recordingTimer.current) clearInterval(recordingTimer.current);
+        setRecording(false);
+        setRecordingKind(null);
+        setRecordingSeconds(0);
+        if (targetProfile) {
+          if (preview) URL.revokeObjectURL(preview.url);
+          setPreview({
+            blob,
+            url: URL.createObjectURL(blob),
+            kind,
+            profileId: targetProfile,
+            duration,
+            channelCount,
+          });
+          setProfileNotice(
+            "Take finished. Listen before choosing Keep recording or Discard.",
+          );
+        }
+      };
+      recorder.current = mediaRecorder;
+      setRecordingSeconds(0);
+      setRecording(true);
+      mediaRecorder.start(500);
+      recordingTimer.current = setInterval(() => {
+        recordingElapsed.current += 1;
+        setRecordingSeconds(recordingElapsed.current);
+        if (
+          recordingElapsed.current >= maximumSeconds &&
+          mediaRecorder.state === "recording"
+        )
+          mediaRecorder.stop();
+      }, 1000);
+    } catch {
+      setProfileNotice(
+        "Microphone access was not available. Allow microphone access in the browser and try again.",
+      );
+    }
+  }
+  function stopRecording() {
+    const minimum = recordingKind === "singing" ? 15 : 8;
+    if (recordingSeconds < minimum) {
+      setProfileNotice(
+        `Keep recording for at least ${minimum} seconds before saving.`,
+      );
+      return;
+    }
+    if (recorder.current?.state === "recording") recorder.current.stop();
+  }
+  if (user === undefined)
+    return (
+      <div className="boot">
+        <span>dz</span>
+        <p>Opening your studio…</p>
+      </div>
+    );
+  if (!user) return <AuthGate onAuthenticated={setUser} />;
+  const filtered = songs.filter((s) =>
+    (s.title + s.prompt).toLowerCase().includes(search.toLowerCase()),
+  );
+  return (
+    <div className="app-shell">
+      <aside className="rail">
+        <div className="brand">
+          <span>dz</span>
+        </div>
+        <nav aria-label="Main navigation">
+          <button
+            className={view === "create" ? "active" : ""}
+            onClick={() => setView("create")}
+          >
+            <Icon name="create" />
+            <span>Create</span>
+          </button>
+          <button
+            className={view === "library" ? "active" : ""}
+            onClick={() => setView("library")}
+          >
+            <Icon name="library" />
+            <span>Library</span>
+          </button>
+          <button
+            className={view === "voice" ? "active" : ""}
+            onClick={() => {
+              setView("voice");
+              void loadProfiles();
+            }}
+          >
+            <Icon name="voice" />
+            <span>My Voice</span>
+          </button>
+        </nav>
+        <div className="rail-bottom">
+          <button
+            className="avatar"
+            aria-label="Sign out"
+            title={`Sign out ${user.email}`}
+            onClick={logout}
+          >
+            {user.displayName.slice(0, 2).toUpperCase()}
+          </button>
+        </div>
+      </aside>
+      <main>
+        <header className="topbar">
+          <div>
+            <p>DOZI MUSIC STUDIO</p>
+            <h1>
+              {view === "create"
+                ? "Create"
+                : view === "library"
+                  ? "Your library"
+                  : "Artist voice"}
+            </h1>
+          </div>
+          <div className="provider" title={provider.model}>
+            <i />
+            {provider.name === "elevenlabs"
+              ? "Powered by ElevenLabs"
+              : provider.name === "acestep"
+                ? "ACE-Step"
+                : provider.name === "mock"
+                  ? "Mock engine"
+                  : provider.name}{" "}
+            <span>
+              {provider.available
+                ? `Server ready · ${provider.masterGeneration.toLowerCase()}`
+                : "Unavailable"}
+            </span>
+          </div>
+        </header>
+        {view === "create" ? (
+          <div className="workspace">
+            <section className="composer">
+              <div className="mode-tabs">
+                {(["Simple", "Advanced"] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={mode === m ? "active" : ""}
+                    onClick={() => setMode(m)}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <label className="field-label" htmlFor="idea">
+                SONG IDEA <span>{prompt.length}/500</span>
+              </label>
+              <textarea
+                id="idea"
+                value={prompt}
+                maxLength={500}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe the song you want to make…"
+              />
+              <div className="toggle-row">
+                <div>
+                  <strong>Instrumental</strong>
+                  <small>Create without vocals</small>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={instrumental}
+                  className={`switch ${instrumental ? "on" : ""}`}
+                  onClick={() => setInstrumental((v) => !v)}
+                >
+                  <i />
+                </button>
+              </div>
+              {!instrumental && (
+                <>
+                  <div className="section-head">
+                    <span>LYRICS</span>
+                    <button
+                      onClick={() =>
+                        setLyrics(
+                          "[Verse 1]\nThe road got quiet, but I kept the light\n\n[Chorus]\nPurpose finds us in its own sweet time",
+                        )
+                      }
+                    >
+                      Generate for me <Icon name="spark" />
+                    </button>
+                  </div>
+                  <textarea
+                    className="lyrics"
+                    value={lyrics}
+                    onChange={(e) => setLyrics(e.target.value)}
+                    placeholder="Leave blank and Dozi will write lyrics, or add your own…"
+                  />
+                </>
+              )}
+              {mode === "Advanced" && (
+                <div className="advanced-grid">
+                  <label>
+                    Genre
+                    <input value={plan.genre} readOnly />
+                  </label>
+                  <label>
+                    BPM
+                    <input type="number" value={plan.bpm} readOnly />
+                  </label>
+                  <label>
+                    Key
+                    <select defaultValue="F♯">
+                      <option>F♯</option>
+                      <option>D</option>
+                      <option>A</option>
+                    </select>
+                  </label>
+                  <label>
+                    Duration
+                    <select
+                      value={durationSeconds}
+                      onChange={(e) =>
+                        setDurationSeconds(Number(e.target.value))
+                      }
+                    >
+                      <option value={12}>12 seconds</option>
+                      {["elevenlabs", "minimax"].includes(provider.name) && (
+                        <option value={30}>30 seconds</option>
+                      )}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <button
+                className="blueprint-toggle"
+                onClick={() => setBlueprint((v) => !v)}
+              >
+                <span>
+                  <Icon name="spark" /> Song Blueprint
+                </span>
+                <Icon name="chevron" />
+              </button>
+              {blueprint && (
+                <div className="blueprint">
+                  <div>
+                    <small>STYLE</small>
+                    <strong>{plan.genre}</strong>
+                  </div>
+                  <div>
+                    <small>TEMPO</small>
+                    <strong>{plan.bpm} BPM</strong>
+                  </div>
+                  <div>
+                    <small>TONALITY</small>
+                    <strong>{plan.key}</strong>
+                  </div>
+                  <div>
+                    <small>FEEL</small>
+                    <strong>{plan.mood}</strong>
+                  </div>
+                  <p>
+                    <i />
+                    Sparse Rhodes and restrained pocket drums leave room for the
+                    final chorus to open up.
+                  </p>
+                </div>
+              )}
+              {provider.name === "elevenlabs" && (
+                <label className="provider-policy">
+                  <input
+                    type="checkbox"
+                    checked={providerPolicyAccepted}
+                    onChange={(e) =>
+                      setProviderPolicyAccepted(e.target.checked)
+                    }
+                  />
+                  <span>
+                    <strong>Rights confirmation</strong>
+                    <small>
+                      I have rights to this prompt and its lyrics. They will be
+                      sent to ElevenLabs for generation. Artist imitation and
+                      copyrighted lyrics are not permitted.
+                    </small>
+                  </span>
+                </label>
+              )}
+              <button
+                className="generate"
+                onClick={generate}
+                disabled={
+                  !prompt.trim() ||
+                  submitting ||
+                  (provider.name === "elevenlabs" && !providerPolicyAccepted)
+                }
+              >
+                <Icon name="spark" /> {submitting ? "Starting…" : "Generate"}
+                <kbd>⌘ ↵</kbd>
+              </button>
+              {notice ? (
+                <p className="form-notice" role="alert">
+                  {notice}
+                </p>
+              ) : (
+                <p className="fineprint">
+                  Creates a server-side{" "}
+                  {provider.name === "elevenlabs" ? "MP3" : "WAV"} master ·{" "}
+                  {provider.name === "acestep" ? "ACE-Step" : provider.name}
+                </p>
+              )}
+            </section>
+            <section className="results">
+              <div className="results-head">
+                <div>
+                  <h2>Generations</h2>
+                  <span>{songs.length} songs</span>
+                </div>
+                <div className="results-actions">
+                  <button onClick={() => setRepairImportOpen(true)}>
+                    Import vocal for repair
+                  </button>
+                  <button onClick={loadSongs}>Refresh</button>
+                </div>
+              </div>
+              <div className="result-list">
+                {songs.length === 0 ? (
+                  <div className="empty">
+                    <Icon name="spark" />
+                    <h3>Your next sound starts here</h3>
+                    <p>
+                      Describe a song and generate your first durable version.
+                    </p>
+                  </div>
+                ) : (
+                  songs.map((s, i) => (
+                    <SongCard
+                      key={s.id}
+                      song={s}
+                      tone={i % 3}
+                      active={active}
+                      playing={playing}
+                      time={time}
+                      onPlay={play}
+                      onRepair={(song) => {
+                        setPlaying(false);
+                        setRepairSong(song);
+                        void loadProfiles();
+                      }}
+                      onSeek={(p) => {
+                        setActive(s);
+                        setTime(p * s.duration);
+                        if (audio.current)
+                          audio.current.currentTime = p * s.duration;
+                      }}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+        ) : view === "library" ? (
+          <section className="library-view">
+            <div className="library-tools">
+              <div className="search">
+                <Icon name="search" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search songs and prompts"
+                />
+              </div>
+              <select aria-label="Sort library">
+                <option>Newest first</option>
+                <option>Oldest first</option>
+              </select>
+            </div>
+            {filtered.length ? (
+              <div className="library-grid">
+                {filtered.map((s, i) => (
+                  <article key={s.id}>
+                    <div className="library-cover" data-tone={i % 3}>
+                      <button
+                        disabled={!s.audioUrl}
+                        onClick={() => play(s)}
+                        aria-label={`Play ${s.title}`}
+                      >
+                        <Icon
+                          name={
+                            active?.id === s.id && playing ? "pause" : "play"
+                          }
+                        />
+                      </button>
+                      <span>DZ</span>
+                    </div>
+                    <h3>{s.title}</h3>
+                    <p>
+                      {s.genre} · V{s.version}
+                    </p>
+                    <small>{new Date(s.createdAt).toLocaleString()}</small>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty">
+                <h3>No songs found</h3>
+                <p>Try another search or create your first song.</p>
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="voice-view">
+            <div className="voice-intro">
+              <p>PRIVATE ARTIST IDENTITY</p>
+              <h2>Make your voice selectable</h2>
+              <span>
+                Start a consent-protected singing profile. Dozi will require a
+                live identity check. A short profile can be tested, while about
+                10 minutes of clean singing is the current quality target for
+                trained artist identity. Creating a profile does not clone or
+                publish your voice.
+              </span>
+            </div>
+            <form className="profile-create" onSubmit={createProfile}>
+              <label>
+                PROFILE NAME
+                <input
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  minLength={2}
+                  maxLength={80}
+                  required
+                  placeholder="My Voice"
+                />
+              </label>
+              <button
+                className="generate"
+                disabled={profileBusy || profileName.trim().length < 2}
+              >
+                {profileBusy ? "Creating…" : "Create private profile"}
+              </button>
+            </form>
+            {profiles.length > 0 && (
+              <label className="voice-consent">
+                <input
+                  type="checkbox"
+                  checked={voiceConsent}
+                  onChange={(e) => setVoiceConsent(e.target.checked)}
+                />
+                <span>
+                  <strong>My voice and my authorization</strong>
+                  <small>
+                    I confirm this is my voice or an original recording I
+                    control, and I authorize Dozi to use it only for my private
+                    singing profile. I can revoke the profile later.
+                  </small>
+                </span>
+              </label>
+            )}
+            {profiles.length > 0 && (
+              <section className="mic-setup" aria-label="Microphone setup">
+                <div className="mic-setup-head">
+                  <div>
+                    <small>INPUT DEVICE</small>
+                    <strong>
+                      {monitoring
+                        ? "Signal monitor active"
+                        : "Choose and test your microphone"}
+                    </strong>
+                  </div>
+                  <button
+                    className="enroll"
+                    onClick={() => void setupMicrophone()}
+                    disabled={recording}
+                  >
+                    {monitoring ? "Restart monitor" : "Set up microphone"}
+                  </button>
+                </div>
+                {audioInputs.length > 0 && (
+                  <>
+                    <select
+                      aria-label="Microphone input"
+                      value={selectedInputId}
+                      disabled={recording}
+                      onChange={(event) =>
+                        void setupMicrophone(event.target.value)
+                      }
+                    >
+                      {audioInputs.map((device, index) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Hardware input channel"
+                      value={selectedInputChannel}
+                      disabled={recording}
+                      onChange={(event) => {
+                        const channel = Number(event.target.value);
+                        setSelectedInputChannel(channel);
+                        void setupMicrophone(selectedInputId, channel);
+                      }}
+                    >
+                      <option value={1}>Hardware input 1</option>
+                      <option value={2}>Hardware input 2</option>
+                    </select>
+                  </>
+                )}
+                <div className="input-meter" aria-label="Live input level">
+                  <i style={{ width: `${meterLevel}%` }} />
+                </div>
+                <p>
+                  Speak or sing now. The meter should move into green without
+                  staying at the far right.
+                </p>
+              </section>
+            )}
+            {profileNotice && (
+              <p className="form-notice" role="status" aria-live="polite">
+                {profileNotice}
+              </p>
+            )}
+            {challenge && (
+              <div className="voice-challenge" role="status">
+                <small>
+                  LIVE IDENTITY PHRASE · EXPIRES{" "}
+                  {new Date(challenge.expiresAt).toLocaleTimeString([], {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </small>
+                <blockquote>{challenge.phrase}</blockquote>
+                <p>
+                  Say the complete phrase once, slowly and clearly. Then remain
+                  quiet; recording stops automatically at 15 seconds.
+                </p>
+                <button
+                  className={`record ${recordingKind === "identity" ? "active" : ""}`}
+                  disabled={profileBusy || recordingKind === "singing"}
+                  onClick={
+                    recordingKind === "identity"
+                      ? stopRecording
+                      : () => void startRecording()
+                  }
+                >
+                  <i />
+                  {recordingKind === "identity"
+                    ? `Stop and save · ${recordingSeconds}s`
+                    : profileBusy
+                      ? "Saving securely…"
+                      : "Record live phrase"}
+                </button>
+              </div>
+            )}
+            {recordingKind === "singing" && (
+              <div className="recording-banner" role="status">
+                <i />
+                <div>
+                  <strong>
+                    Recording guided singing · {recordingSeconds}s
+                  </strong>
+                  <small>
+                    Sing a comfortable verse and chorus. Multiple varied takes
+                    can be combined toward the 10-minute quality target.
+                  </small>
+                </div>
+                <button onClick={stopRecording}>Stop</button>
+              </div>
+            )}
+            {preview && (
+              <section className="take-preview">
+                <div>
+                  <small>REVIEW BEFORE UPLOAD</small>
+                  <strong>
+                    {preview.kind === "identity"
+                      ? "Live identity phrase"
+                      : "Guided singing take"}{" "}
+                    · {preview.duration}s
+                  </strong>
+                </div>
+                <audio controls src={preview.url} />
+                <div className="take-actions">
+                  <button onClick={discardPreview}>Discard</button>
+                  <button
+                    onClick={() => void keepPreview()}
+                    disabled={profileBusy}
+                  >
+                    {profileBusy ? "Uploading…" : "Keep recording"}
+                  </button>
+                </div>
+              </section>
+            )}
+            <div className="profile-list">
+              {profiles.map((p) => (
+                <article key={p.id}>
+                  <div className="profile-mic">
+                    <Icon name="voice" />
+                  </div>
+                  <div>
+                    <div className="profile-title">
+                      <h3>{p.name}</h3>
+                      <span>{p.status.toLowerCase()}</span>
+                    </div>
+                    <p>
+                      {p.sourceCount} recordings ·{" "}
+                      {Math.round(p.usableSingingSeconds)}s usable singing
+                    </p>
+                    {p.verifiedAt && (
+                      <p className="form-notice" role="status">
+                        Identity phrase verified locally
+                        {p.latestPhraseMatchScore !== null
+                          ? ` · ${Math.round(p.latestPhraseMatchScore * 100)}% phrase match`
+                          : ""}
+                      </p>
+                    )}
+                    <div className="profile-progress">
+                      <i
+                        style={{
+                          width: `${Math.min(100, (p.usableSingingSeconds / 600) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    {p.sources?.length > 0 && (
+                      <div className="voice-takes">
+                        <strong>Saved private takes</strong>
+                        {visibleVoiceSources(p.sources).map((source, index) => {
+                          const summary = voiceSourceSummary(source, p.sources);
+                          return <div className="voice-take" key={source.id}>
+                            <div>
+                              <span>
+                                {source.sourceType === "LIVE_SPEECH"
+                                  ? "Identity phrase"
+                                  : source.sourceType === "OWNED_VOCAL_BOUNCE"
+                                    ? importedPerformanceName(source.originalFilename)
+                                    : source.sourceType === "SEPARATED_OWNED_MIX"
+                                      ? "Imported song vocal"
+                                      : `Singing take ${p.sources.filter((item) => item.sourceType === "LIVE_SINGING").length - p.sources.slice(0, index).filter((item) => item.sourceType === "LIVE_SINGING").length}`}
+                              </span>
+                              <small>
+                                {Math.round(summary.durationSeconds)}s
+                                {summary.partCount > 1
+                                  ? ` · ${summary.partCount} securely stored parts`
+                                  : ""}{" "}
+                                · {summary.analysisStatus.toLowerCase()}
+                                {summary.qualityScore !== null
+                                  ? ` · quality ${Math.round(summary.qualityScore)}`
+                                  : ""}
+                              </small>
+                            </div>
+                            <audio controls preload="none" src={source.audioUrl} />
+                          </div>
+                        })}
+                      </div>
+                    )}
+                    <small>
+                      {p.status === "DRAFT"
+                        ? "Next: accept the terms and begin the live identity challenge."
+                        : p.status === "ACTIVE"
+                          ? "Ready to use for supported singing generation."
+                          : "Enrollment is in progress."}
+                    </small>
+                    {p.status !== "ACTIVE" && p.status !== "REVOKED" && (
+                      <button
+                        className="enroll"
+                        disabled={
+                          profileBusy ||
+                          recording ||
+                          !!preview ||
+                          (p.status === "DRAFT" && !voiceConsent)
+                        }
+                        onClick={() =>
+                          p.status === "DRAFT"
+                            ? void beginEnrollment(p.id)
+                            : void startRecording("singing", p.id)
+                        }
+                      >
+                        {p.status === "DRAFT"
+                          ? "Begin identity enrollment"
+                          : "Record singing sample"}
+                      </button>
+                    )}
+                    {p.status !== "DRAFT" && p.status !== "REVOKED" && (
+                      <label className="enroll import-vocal">
+                        {profileBusy ? "Importing…" : "Import vocal file"}
+                        <input
+                          type="file"
+                          accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/ogg,audio/webm,.wav,.flac,.mp3,.m4a,.ogg,.webm"
+                          disabled={profileBusy || recording || !!preview}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            event.target.value = "";
+                            if (file) void importVocalFile(p.id, file);
+                          }}
+                        />
+                      </label>
+                    )}
+                    {importProgress?.profileId === p.id && (
+                      <div
+                        className={`import-progress ${importProgress.stage.toLowerCase()}`}
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {(importProgress.stage === "READING" ||
+                          importProgress.stage === "UPLOADING") && (
+                          <progress aria-label="Vocal import in progress" />
+                        )}
+                        <div>
+                          <strong>{importProgress.fileName}</strong>
+                          <span>{importProgress.message}</span>
+                        </div>
+                      </div>
+                    )}
+                    {p.status !== "DRAFT" && p.status !== "REVOKED" && (
+                      <button
+                        className="enroll"
+                        disabled={
+                          profileBusy ||
+                          recording ||
+                          !!preview ||
+                          !p.sources?.some(
+                            (source) =>
+                              source.sourceType !== "LIVE_SPEECH" &&
+                              source.analysisStatus === "PENDING",
+                          )
+                        }
+                        onClick={() => void analyzeProfile(p.id)}
+                      >
+                        {profileBusy
+                          ? "Analyzing…"
+                          : p.sources?.some(
+                                (source) =>
+                                  source.sourceType !== "LIVE_SPEECH" &&
+                                  source.analysisStatus === "PENDING",
+                              )
+                            ? "Analyze pending singing takes"
+                            : "Singing analysis complete"}
+                      </button>
+                    )}
+                    {p.status !== "DRAFT" && p.status !== "REVOKED" && (
+                      <button
+                        className="enroll"
+                        disabled={
+                          profileBusy ||
+                          recording ||
+                          !!preview ||
+                          !voiceConsent
+                        }
+                        onClick={() => void beginEnrollment(p.id)}
+                      >
+                        Redo identity phrase
+                      </button>
+                    )}
+                    {analysisProgress?.profileId === p.id && (
+                      <div className="analysis-progress" role="status">
+                        <progress
+                          max={Math.max(1, analysisProgress.total)}
+                          value={analysisProgress.processed}
+                        />
+                        <span>
+                          {analysisProgress.running
+                            ? analysisProgress.total
+                              ? `Analyzing take ${Math.min(analysisProgress.processed + 1, analysisProgress.total)} of ${analysisProgress.total}…`
+                              : "Preparing saved takes…"
+                            : `Analysis finished · ${analysisProgress.processed} of ${analysisProgress.total} processed`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {profiles.length === 0 && (
+                <div className="empty">
+                  <Icon name="voice" />
+                  <h3>No artist voice yet</h3>
+                  <p>Create a private profile to begin guided enrollment.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </main>
+      <footer className={`player ${active ? "visible" : ""}`}>
+        {/* Music is instrumental/generated; captions are not applicable. */}
+        <audio
+          ref={audio}
+          src={active?.audioUrl}
+          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+          onEnded={() => setPlaying(false)}
+        />
+        <div className="now">
+          <div className="mini-cover">DZ</div>
+          <div>
+            <strong>{active?.title || "Choose a song"}</strong>
+            <span>
+              {active
+                ? `${active.genre} · Version ${active.version}`
+                : "Nothing playing"}
+            </span>
+          </div>
+        </div>
+        <div className="transport">
+          <div>
+            <button aria-label="Previous">
+              <Icon name="skip" />
+            </button>
+            <button
+              className="main-play"
+              aria-label={playing ? "Pause" : "Play"}
+              onClick={() => active && setPlaying((v) => !v)}
+            >
+              <Icon name={playing ? "pause" : "play"} />
+            </button>
+            <button aria-label="Next">
+              <Icon name="skip" />
+            </button>
+          </div>
+          {active && (
+            <div className="timeline">
+              <span>{fmt(time)}</span>
+              <Wave
+                compact
+                data={active.waveform}
+                progress={time / active.duration}
+                onSeek={(p) => {
+                  setTime(p * active.duration);
+                  if (audio.current)
+                    audio.current.currentTime = p * active.duration;
+                }}
+              />
+              <span>{fmt(active.duration)}</span>
+            </div>
+          )}
+        </div>
+        <div className="volume">
+          <Icon name="volume" />
+          <input
+            aria-label="Volume"
+            type="range"
+            min="0"
+            max="1"
+            step=".05"
+            defaultValue=".8"
+            onChange={(e) => {
+              if (audio.current) audio.current.volume = Number(e.target.value);
+            }}
+          />
+        </div>
+      </footer>
+      {repairSong && (
+        <PhraseRepairModal
+          song={repairSong}
+          initialTime={active?.id === repairSong.id ? time : 0}
+          profiles={profiles}
+          onClose={() => setRepairSong(null)}
+        />
+      )}
+      {repairImportOpen && (
+        <VocalRepairImportModal
+          onClose={() => setRepairImportOpen(false)}
+          onImported={(song) => {
+            setSongs((items) => [song, ...items]);
+            setRepairImportOpen(false);
+            setRepairSong(song);
+            void loadProfiles();
+          }}
+        />
+      )}
+      {profileError && (
+        <div className="error-modal-backdrop" role="presentation">
+          <section
+            className="error-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="analysis-error-title"
+          >
+            <small>VOCAL ANALYSIS</small>
+            <h2 id="analysis-error-title">Analysis could not continue</h2>
+            <p>{profileError}</p>
+            <p className="error-modal-help">
+              Your imported audio remains saved. Close this message and try
+              analysis again after checking that the AI gateway is running.
+            </p>
+            <button onClick={() => setProfileError("")}>
+              Close
+            </button>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VocalRepairImportModal({
+  onClose,
+  onImported,
+}: {
+  onClose: () => void;
+  onImported: (song: Song) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null),
+    [rightsAttested, setRightsAttested] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file || !rightsAttested || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const context = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(await file.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      const mono = new Float32Array(decoded.length);
+      for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+        const samples = decoded.getChannelData(channel);
+        for (let index = 0; index < samples.length; index += 1)
+          mono[index] += samples[index] / decoded.numberOfChannels;
+      }
+      const wav = encodeMonoPcm16Wav(mono, decoded.sampleRate),
+        baseName = file.name.replace(/\.[^.]+$/, "") || "Imported vocal",
+        form = new FormData();
+      form.set(
+        "audio",
+        new File([wav], `${baseName}.wav`, { type: "audio/wav" }),
+      );
+      form.set("durationSeconds", String(decoded.duration));
+      form.set("sampleRate", String(decoded.sampleRate));
+      form.set("rightsAttested", "true");
+      form.set("title", `Vocal repair · ${baseName}`);
+      const response = await fetch("/api/vocal-repairs/import-source", {
+          method: "POST",
+          body: form,
+        }),
+        data = (await response.json()) as {
+          song?: Song;
+          error?: { message: string };
+        };
+      if (!response.ok || !data.song)
+        throw new Error(data.error?.message || "Could not import the vocal source.");
+      onImported(data.song);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not import the vocal source.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="repair-modal-backdrop" role="presentation">
+      <section
+        className="repair-modal repair-import-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="repair-import-title"
+      >
+        <div className="repair-modal-head">
+          <div>
+            <small>PRIVATE VOCAL IMPORT</small>
+            <h2 id="repair-import-title">Import a vocal to repair</h2>
+          </div>
+          <button aria-label="Close vocal import" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <p className="repair-import-help">
+          Choose the original isolated vocal or aligned guide. Dozi creates a
+          private vocal-only source and opens Phrase Repair automatically.
+        </p>
+        <form className="repair-form" onSubmit={submit}>
+          <label className="repair-file-picker">
+            VOCAL FILE
+            <input
+              type="file"
+              accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/ogg,audio/webm,.wav,.flac,.mp3,.m4a,.ogg,.webm"
+              required
+              disabled={busy}
+              onChange={(event) => setFile(event.target.files?.[0] || null)}
+            />
+          </label>
+          <label className="repair-attestation">
+            <input
+              type="checkbox"
+              checked={rightsAttested}
+              onChange={(event) => setRightsAttested(event.target.checked)}
+            />
+            <span>
+              <strong>I own or control this vocal recording</strong>
+              <small>It will remain private within my Dozi account.</small>
+            </span>
+          </label>
+          <button className="repair-primary" disabled={!file || !rightsAttested || busy}>
+            {busy ? "Importing vocal…" : "Import and open Phrase Repair"}
+          </button>
+        </form>
+        {error && (
+          <p className="repair-error" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function PhraseRepairModal({
+  song,
+  initialTime,
+  profiles,
+  onClose,
+}: {
+  song: Song;
+  initialTime: number;
+  profiles: VocalProfile[];
+  onClose: () => void;
+}) {
+  const verifiedProfiles = profiles.filter(
+      (profile) => profile.verifiedAt && profile.status !== "REVOKED",
+    ),
+    safeStart = Math.max(0, Math.min(song.duration - 0.25, initialTime)),
+    [startSeconds, setStartSeconds] = useState(Number(safeStart.toFixed(2))),
+    [endSeconds, setEndSeconds] = useState(
+      Number(Math.min(song.duration, safeStart + 4).toFixed(2)),
+    ),
+    [lyricText, setLyricText] = useState(""),
+    [profileId, setProfileId] = useState(verifiedProfiles[0]?.id || ""),
+    [crossfadeMs, setCrossfadeMs] = useState(80),
+    [rightsAttested, setRightsAttested] = useState(false),
+    [repair, setRepair] = useState<VocalRepair | null>(null),
+    [previousRepairs, setPreviousRepairs] = useState<VocalRepair[]>([]),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState(""),
+    [error, setError] = useState(""),
+    selectedProfileId = profileId || verifiedProfiles[0]?.id || "";
+  useEffect(() => {
+    let current = true;
+    fetch(`/api/vocal-repairs?generationId=${encodeURIComponent(song.id)}`, {
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const data = (await response.json()) as {
+          repairs?: VocalRepair[];
+          error?: { message: string };
+        };
+        if (!response.ok)
+          throw new Error(data.error?.message || "Could not load phrase repairs.");
+        if (current) setPreviousRepairs(data.repairs || []);
+      })
+      .catch((reason) => {
+        if (current)
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not load phrase repairs.",
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [song.id]);
+
+  async function createRepair(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !selectedProfileId) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/vocal-repairs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            generationId: song.id,
+            vocalProfileId: selectedProfileId,
+            lyricText,
+            startSeconds,
+            endSeconds,
+            crossfadeMs,
+          }),
+        }),
+        data = (await response.json()) as {
+          repair?: VocalRepair;
+          error?: { message: string };
+        };
+      if (!response.ok || !data.repair)
+        throw new Error(data.error?.message || "Could not create the repair.");
+      setRepair(data.repair);
+      setPreviousRepairs((items) => [data.repair as VocalRepair, ...items]);
+      setMessage("Repair region saved. Add your clean punch-in take next.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Could not create the repair.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadCandidate(file: File) {
+    if (!repair || !rightsAttested || busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("Checking and securely uploading the punch-in…");
+    try {
+      const context = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(await file.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      const form = new FormData();
+      form.set("audio", file);
+      form.set("durationSeconds", String(decoded.duration));
+      form.set("channelCount", String(decoded.numberOfChannels));
+      form.set("sampleRate", String(decoded.sampleRate));
+      form.set("rightsAttested", "true");
+      form.set("label", file.name.replace(/\.[^.]+$/, "") || "Artist punch-in");
+      const response = await fetch(
+          `/api/vocal-repairs/${repair.id}/candidates`,
+          { method: "POST", body: form },
+        ),
+        data = (await response.json()) as {
+          candidate?: VocalRepairCandidate;
+          error?: { message: string };
+        };
+      if (!response.ok || !data.candidate)
+        throw new Error(data.error?.message || "Could not upload the punch-in.");
+      setRepair((current) =>
+        current
+          ? {
+              ...current,
+              status: "READY",
+              candidates: [data.candidate as VocalRepairCandidate, ...current.candidates],
+            }
+          : current,
+      );
+      setMessage("Punch-in ready. Listen, then choose Use this take.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Could not upload the punch-in.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadSourceVocal(file: File) {
+    if (!repair || !rightsAttested || busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("Preparing the aligned source vocal…");
+    try {
+      const context = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await context.decodeAudioData(await file.arrayBuffer());
+      } finally {
+        void context.close();
+      }
+      const mono = new Float32Array(decoded.length);
+      for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+        const samples = decoded.getChannelData(channel);
+        for (let index = 0; index < samples.length; index += 1)
+          mono[index] += samples[index] / decoded.numberOfChannels;
+      }
+      const wav = encodeMonoPcm16Wav(mono, decoded.sampleRate),
+        form = new FormData();
+      form.set(
+        "audio",
+        new File([wav], `${file.name.replace(/\.[^.]+$/, "") || "source-vocal"}.wav`, {
+          type: "audio/wav",
+        }),
+      );
+      form.set("durationSeconds", String(decoded.duration));
+      form.set("channelCount", "1");
+      form.set("sampleRate", String(decoded.sampleRate));
+      form.set("rightsAttested", "true");
+      const response = await fetch(`/api/vocal-repairs/${repair.id}/source`, {
+          method: "POST",
+          body: form,
+        }),
+        data = (await response.json()) as {
+          source?: { audioAssetId: string; audioUrl: string };
+          error?: { message: string };
+        };
+      if (!response.ok || !data.source)
+        throw new Error(data.error?.message || "Could not save the source vocal stem.");
+      setRepair((current) =>
+        current
+          ? {
+              ...current,
+              sourceVocalAssetId: data.source?.audioAssetId || null,
+              sourceVocalAudioUrl: data.source?.audioUrl,
+            }
+          : current,
+      );
+      setMessage("Source vocal is aligned and ready for a non-destructive repair.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not save the source vocal stem.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectCandidate(candidateId: string) {
+    if (!repair || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/vocal-repairs/${repair.id}/select`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ candidateId }),
+        }),
+        data = (await response.json()) as {
+          selection?: { candidateId: string };
+          error?: { message: string };
+        };
+      if (!response.ok || !data.selection)
+        throw new Error(data.error?.message || "Could not select the take.");
+      setRepair((current) =>
+        current
+          ? {
+              ...current,
+              status: "SELECTED",
+              candidates: current.candidates.map((candidate) => ({
+                ...candidate,
+                status:
+                  candidate.id === candidateId
+                    ? "SELECTED"
+                    : candidate.status === "SELECTED"
+                      ? "READY"
+                      : candidate.status,
+              })),
+            }
+          : current,
+      );
+      setMessage(
+        "Take selected. Render it when the aligned source vocal is ready.",
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Could not select the take.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renderRepair() {
+    if (!repair || busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("Rendering the phrase crossfade…");
+    try {
+      const response = await fetch(`/api/vocal-repairs/${repair.id}/render`, {
+          method: "POST",
+        }),
+        data = (await response.json()) as {
+          render?: { audioAssetId: string; audioUrl: string; status: "APPLIED" };
+          error?: { message: string };
+        };
+      if (!response.ok || !data.render)
+        throw new Error(data.error?.message || "Could not render the phrase repair.");
+      setRepair((current) =>
+        current
+          ? {
+              ...current,
+              status: data.render?.status || "APPLIED",
+              renderedAudioAssetId: data.render?.audioAssetId || null,
+              renderedAudioUrl: data.render?.audioUrl,
+            }
+          : current,
+      );
+      setMessage("Repair rendered. Audition the new vocal before using it in a mix.");
+    } catch (reason) {
+      setRepair((current) => (current ? { ...current, status: "FAILED" } : current));
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not render the phrase repair.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="repair-modal-backdrop" role="presentation">
+      <section
+        className="repair-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="repair-modal-title"
+      >
+        <div className="repair-modal-head">
+          <div>
+            <small>VOCAL PHRASE REPAIR</small>
+            <h2 id="repair-modal-title">Fix one line, keep the performance</h2>
+          </div>
+          <button aria-label="Close phrase repair" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div className="repair-source">
+          <div>
+            <strong>{song.title}</strong>
+            <span>
+              Version {song.version} · {song.duration.toFixed(0)} seconds
+            </span>
+          </div>
+          <audio controls preload="metadata" src={song.audioUrl} />
+        </div>
+        {!repair ? (
+          <form className="repair-form" onSubmit={createRepair}>
+            <label className="repair-lyric">
+              LYRIC TO REPAIR
+              <input
+                value={lyricText}
+                onChange={(event) => setLyricText(event.target.value)}
+                placeholder='For example: "my mix"'
+                required
+                maxLength={500}
+              />
+            </label>
+            <div className="repair-range">
+              <label>
+                START
+                <input
+                  type="number"
+                  min={0}
+                  max={song.duration}
+                  step="0.01"
+                  value={startSeconds}
+                  onChange={(event) => setStartSeconds(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                END
+                <input
+                  type="number"
+                  min={0.25}
+                  max={song.duration}
+                  step="0.01"
+                  value={endSeconds}
+                  onChange={(event) => setEndSeconds(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                CROSSFADE
+                <select
+                  value={crossfadeMs}
+                  onChange={(event) => setCrossfadeMs(Number(event.target.value))}
+                >
+                  <option value={40}>40 ms</option>
+                  <option value={80}>80 ms</option>
+                  <option value={120}>120 ms</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              ARTIST VOICE
+              <select
+                value={selectedProfileId}
+                onChange={(event) => setProfileId(event.target.value)}
+                required
+              >
+                <option value="" disabled>
+                  Choose a verified voice
+                </option>
+                {verifiedProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!verifiedProfiles.length && (
+              <p className="repair-warning">
+                Complete the identity phrase in My Voice before creating a repair.
+              </p>
+            )}
+            <button
+              className="repair-primary"
+              disabled={
+                busy ||
+                !verifiedProfiles.length ||
+                !lyricText.trim() ||
+                endSeconds <= startSeconds ||
+                endSeconds > song.duration
+              }
+            >
+              {busy ? "Saving region…" : "Create repair region"}
+            </button>
+          </form>
+        ) : (
+          <div className="repair-takes">
+            <div className="repair-region-summary">
+              <div>
+                <small>REGION</small>
+                <strong>
+                  {repair.startSeconds.toFixed(2)}–{repair.endSeconds.toFixed(2)}s
+                </strong>
+              </div>
+              <blockquote>“{repair.lyricText}”</blockquote>
+              <span>{repair.crossfadeMs} ms crossfade</span>
+            </div>
+            <label className="repair-attestation">
+              <input
+                type="checkbox"
+                checked={rightsAttested}
+                onChange={(event) => setRightsAttested(event.target.checked)}
+              />
+              <span>
+                <strong>I own or control these vocal recordings</strong>
+                <small>
+                  The source stem and punch-in remain private and attached to this
+                  repair.
+                </small>
+              </span>
+            </label>
+            {repair.sourceVocalAudioUrl ? (
+              <div className="repair-source-vocal">
+                <div>
+                  <strong>Aligned original vocal</strong>
+                  <span>Timeline-aligned source for the non-destructive crossfade</span>
+                </div>
+                <audio controls preload="none" src={repair.sourceVocalAudioUrl} />
+              </div>
+            ) : (
+              <label
+                className={`repair-upload ${busy || !rightsAttested ? "disabled" : ""}`}
+              >
+                {busy ? "Preparing source…" : "Import aligned original vocal stem"}
+                <input
+                  type="file"
+                  accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/ogg,audio/webm,.wav,.flac,.mp3,.m4a,.ogg,.webm"
+                  disabled={busy || !rightsAttested}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void uploadSourceVocal(file);
+                  }}
+                />
+                <small>
+                  Use an isolated vocal beginning at 0:00 that extends beyond this
+                  phrase.
+                </small>
+              </label>
+            )}
+            <label className={`repair-upload ${busy || !rightsAttested ? "disabled" : ""}`}>
+              {busy ? "Uploading…" : "Import owned punch-in"}
+              <input
+                type="file"
+                accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/mp4,audio/x-m4a,audio/ogg,audio/webm,.wav,.flac,.mp3,.m4a,.ogg,.webm"
+                disabled={busy || !rightsAttested}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadCandidate(file);
+                }}
+              />
+            </label>
+            {repair.candidates.map((candidate) => (
+              <article className="repair-candidate" key={candidate.id}>
+                <div>
+                  <strong>{candidate.label}</strong>
+                  <span>
+                    Owned artist punch-in · {candidate.status.toLowerCase()}
+                  </span>
+                </div>
+                {candidate.audioUrl && (
+                  <audio controls preload="none" src={candidate.audioUrl} />
+                )}
+                <button
+                  disabled={busy || candidate.status === "SELECTED"}
+                  onClick={() => void selectCandidate(candidate.id)}
+                >
+                  {candidate.status === "SELECTED" ? "Selected" : "Use this take"}
+                </button>
+              </article>
+            ))}
+            {repair.renderedAudioUrl ? (
+              <div className="repair-rendered">
+                <div>
+                  <small>REPAIRED VOCAL</small>
+                  <strong>Crossfade preview ready</strong>
+                </div>
+                <audio controls preload="metadata" src={repair.renderedAudioUrl} />
+                <p>
+                  This is a new vocal alternative. The original vocal and song master
+                  remain unchanged.
+                </p>
+              </div>
+            ) : (
+              <button
+                className="repair-primary"
+                disabled={
+                  busy ||
+                  !repair.sourceVocalAssetId ||
+                  !repair.candidates.some((candidate) => candidate.status === "SELECTED")
+                }
+                onClick={() => void renderRepair()}
+              >
+                {busy
+                  ? "Rendering repair…"
+                  : repair.status === "FAILED"
+                    ? "Retry repair render"
+                    : "Render repair preview"}
+              </button>
+            )}
+          </div>
+        )}
+        {message && (
+          <p className="repair-message" role="status">
+            {message}
+          </p>
+        )}
+        {error && (
+          <p className="repair-error" role="alert">
+            {error}
+          </p>
+        )}
+        {!!previousRepairs.length && !repair && (
+          <p className="repair-history">
+            {previousRepairs.length} saved repair
+            {previousRepairs.length === 1 ? "" : "s"} for this version.
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function SongCard({
+  song: s,
+  tone,
+  active,
+  playing,
+  time,
+  onPlay,
+  onRepair,
+  onSeek,
+}: {
+  song: Song;
+  tone: number;
+  active: Song | null;
+  playing: boolean;
+  time: number;
+  onPlay: (s: Song) => void;
+  onRepair: (s: Song) => void;
+  onSeek: (p: number) => void;
+}) {
+  const fmt = (n: number) =>
+      `${Math.floor(n / 60)}:${Math.floor(n % 60)
+        .toString()
+        .padStart(2, "0")}`,
+    extension = s.provider === "elevenlabs" ? "mp3" : "wav";
+  return (
+    <article className="song-card">
+      <div className="cover" data-tone={tone}>
+        <span>{s.status === "COMPLETE" ? "DZ" : s.progress + "%"}</span>
+      </div>
+      <div className="song-body">
+        <div className="song-title">
+          <div>
+            <h3>{s.title}</h3>
+            <p>
+              {s.genre} · {s.bpm} BPM · {s.musicalKey}
+            </p>
+          </div>
+          <div className="song-actions">
+            <button aria-label="Favorite">
+              <Icon name="heart" />
+            </button>
+            {s.audioUrl && (
+              <a
+                href={s.audioUrl}
+                download={`${s.title}.${extension}`}
+                aria-label={`Download ${extension.toUpperCase()}`}
+              >
+                <Icon name="download" />
+              </a>
+            )}
+            <button aria-label="More">
+              <Icon name="more" />
+            </button>
+          </div>
+        </div>
+        {s.status === "COMPLETE" ? (
+          <Wave
+            data={s.waveform}
+            progress={active?.id === s.id ? time / s.duration : 0}
+            onSeek={onSeek}
+          />
+        ) : (
+          <div className="job-progress">
+            <div>
+              <i style={{ width: `${s.progress}%` }} />
+            </div>
+            <span>
+              {s.status === "FAILED" && s.errorMessage
+                ? s.errorMessage
+                : labels[s.status]}
+            </span>
+          </div>
+        )}
+        <div className="song-foot">
+          <button
+            className="play"
+            disabled={s.status !== "COMPLETE" || !s.audioUrl}
+            onClick={() => onPlay(s)}
+          >
+            <Icon name={active?.id === s.id && playing ? "pause" : "play"} />
+          </button>
+          <span>V{s.version}</span>
+          <span>{fmt(s.duration)}</span>
+          <span>Seed {s.seed}</span>
+          <button
+            className="remix"
+            disabled={s.status !== "COMPLETE" || !s.audioUrl}
+            onClick={() => onRepair(s)}
+          >
+            Repair vocal
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}

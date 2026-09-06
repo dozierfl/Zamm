@@ -1,10 +1,12 @@
 import base64, hashlib, io, json, logging, math, os, struct, time, wave
 from typing import Any, Literal
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request as HttpRequest
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from .ace_step import AceStepClient, AceStepError, AceStepRequestTranslator, AceStepSettings
 from .minimax import MiniMaxClient, MiniMaxError, MiniMaxRequestTranslator, MiniMaxSettings
+from .phrase_repair import render_phrase_repair
+from .vocal_analysis import analyze_vocal, verify_identity_phrase
 
 Role=Literal["MASTER","PREMASTER","NATIVE_TRACK","DERIVED_STEM","EFFECT_RETURN","ALTERNATIVE","REFERENCE","UPLOAD"]
 Provenance=Literal["GENERATED_NATIVE","SEPARATED","RENDERED","UPLOADED","REFERENCE","DERIVED"]
@@ -23,6 +25,10 @@ class Metadata(BaseModel):
 class Asset(BaseModel):
     assetKey:str;role:Role;instrument:str|None=None;instrumentGroup:str|None=None;provenance:Provenance="GENERATED_NATIVE";isPrimary:bool=False;sortOrder:int;audio:Audio;metadata:Metadata;providerMetadata:dict[str,Any]={}
 class Result(BaseModel):assets:list[Asset];providerMetadata:dict[str,Any]={}
+class VocalAnalysisRequest(BaseModel):audioBase64:str;mimeType:str;minimumUsableSeconds:float=Field(default=15,ge=1,le=30)
+class IdentityVerificationRequest(VocalAnalysisRequest):expectedPhrase:str
+class PhraseRepairRequest(BaseModel):
+    sourceAudioBase64:str;replacementAudioBase64:str;startSeconds:float=Field(ge=0);endSeconds:float=Field(gt=0);crossfadeMs:int=Field(default=80,ge=0,le=500)
 
 def settings():return AceStepSettings(base_url=os.getenv("ACESTEP_BASE_URL","http://127.0.0.1:8001"),api_key=os.getenv("ACESTEP_API_KEY") or None,model=os.getenv("ACESTEP_MODEL","acestep-v15-turbo"),timeout_seconds=float(os.getenv("ACESTEP_TIMEOUT_SECONDS","900")),poll_interval_seconds=float(os.getenv("ACESTEP_POLL_INTERVAL_MS","2000"))/1000,thinking=os.getenv("ACESTEP_THINKING","false").lower()=="true",inference_steps=int(os.getenv("ACESTEP_INFERENCE_STEPS","8")))
 def minimax_settings():return MiniMaxSettings(base_url=os.getenv("MINIMAX_BASE_URL","http://127.0.0.1:8002"),model=os.getenv("MINIMAX_MODEL","MiniMax-Music3-mxfp8"),timeout_seconds=float(os.getenv("MINIMAX_TIMEOUT_SECONDS","1800")),steps=int(os.getenv("MINIMAX_STEPS","30")))
@@ -32,6 +38,28 @@ ace_assets:dict[str,tuple[bytes,str]]={}
 def authorize(value:str|None):
     token=os.getenv("AI_SERVICE_TOKEN")
     if token and value!=f"Bearer {token}":raise HTTPException(401,"invalid service token")
+@app.post("/v1/vocal-analysis")
+def vocal_analysis(request:VocalAnalysisRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    try:data=base64.b64decode(request.audioBase64,validate=True);return analyze_vocal(data,request.minimumUsableSeconds)
+    except (ValueError,base64.binascii.Error) as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+@app.post("/v1/vocal-analysis-audio")
+async def vocal_analysis_audio(request:HttpRequest,authorization:str|None=Header(default=None),x_minimum_usable_seconds:float=Header(default=15)):
+    authorize(authorization)
+    try:return analyze_vocal(await request.body(),max(1,min(30,x_minimum_usable_seconds)))
+    except ValueError as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+@app.post("/v1/identity-verification")
+def identity_verification(request:IdentityVerificationRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    try:data=base64.b64decode(request.audioBase64,validate=True);return verify_identity_phrase(data,request.expectedPhrase)
+    except (ValueError,base64.binascii.Error) as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+@app.post("/v1/phrase-repair-render")
+def phrase_repair_render(request:PhraseRepairRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    try:
+        source=base64.b64decode(request.sourceAudioBase64,validate=True);replacement=base64.b64decode(request.replacementAudioBase64,validate=True)
+        return render_phrase_repair(source,replacement,start_seconds=request.startSeconds,end_seconds=request.endSeconds,crossfade_ms=request.crossfadeMs)
+    except (ValueError,base64.binascii.Error) as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
 def wav_bytes(seed:int,duration:int,bpm:int):
     rate=16000;out=io.BytesIO()
     with wave.open(out,"wb") as wav:wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(rate);wav.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*(110+(seed%12)*7)*i/rate))) for i in range(rate*duration)))
