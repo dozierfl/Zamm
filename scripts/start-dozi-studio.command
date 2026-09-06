@@ -48,8 +48,8 @@ if [[ "$PROVIDER" == "acestep" ]]; then
   fi
 
   echo "[4/5] Starting the Dozi AI gateway..."
-  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
-    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+  if curl --fail --silent http://127.0.0.1:8000/health | grep -q '"stemSeparation"';then echo "Dozi AI gateway is already ready.";else
+    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
     wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
   fi
 elif [[ "$PROVIDER" == "minimax" ]]; then
@@ -61,18 +61,23 @@ elif [[ "$PROVIDER" == "minimax" ]]; then
   echo "[4/5] Starting the Dozi AI gateway..."
   if curl --fail --silent http://127.0.0.1:8000/health | grep -q '"'"'"minimax"'"'"';then echo "Dozi AI gateway is already ready.";else
     if gateway_pid="$(lsof -ti tcp:8000 2>/dev/null)" && [[ -n "$gateway_pid" ]];then echo "Port 8000 is occupied by an older gateway process. Stop the previous Dozi launcher and retry.";exit 1;fi
-    (export MINIMAX_BASE_URL="http://127.0.0.1:8002";cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+    (export MINIMAX_BASE_URL="http://127.0.0.1:8002";cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
     wait_for_command "Dozi AI gateway with MiniMax" 120 bash -c 'curl --fail --silent http://127.0.0.1:8000/health | grep -q '"'"'"minimax"'"'"''
   fi
 elif [[ "$PROVIDER" == "ai-service" ]]; then
   echo "[4/5] Starting the Dozi AI gateway..."
-  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null 2>&1;then echo "Dozi AI gateway is already ready.";else
-    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+  if curl --fail --silent http://127.0.0.1:8000/health | grep -q '"stemSeparation"';then echo "Dozi AI gateway is already ready.";else
+    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
     wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
   fi
 else
   echo "Hosted/local provider needs no separate model process."
-  echo "[4/5] Dozi AI gateway not required."
+  echo "[4/5] Starting the Dozi AI gateway for voice and stem services..."
+  if curl --fail --silent http://127.0.0.1:8000/health | grep -q '"stemSeparation"';then echo "Dozi AI gateway is already ready.";else
+    if gateway_pid="$(lsof -ti tcp:8000 2>/dev/null)" && [[ -n "$gateway_pid" ]];then echo "Port 8000 is occupied by an older gateway process. Stop the previous Dozi launcher and retry.";exit 1;fi
+    (cd "$PROJECT/ai-service";exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)>"$LOG_DIR/dozi-gateway.log" 2>&1&STARTED_PIDS+=("$!")
+    wait_for_url "Dozi AI gateway" "http://127.0.0.1:8000/health" 120
+  fi
 fi
 
 echo "[5/5] Starting Dozi Music Studio..."

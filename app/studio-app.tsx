@@ -20,6 +20,7 @@ type Status =
   | "CANCELLED";
 type Song = {
   id: string;
+  songId?: string;
   title: string;
   prompt: string;
   createdAt: string;
@@ -35,6 +36,55 @@ type Song = {
   seed: number;
   audioUrl?: string;
   errorMessage?: string;
+};
+type TrackAsset = {
+  id: string;
+  audioAssetId: string;
+  role: string;
+  instrument: string | null;
+  instrumentGroup: string | null;
+  sourceType: string;
+  sortOrder: number;
+  isPrimary: boolean;
+  timelineStartSeconds: number;
+  sourceStartSeconds: number;
+  sourceEndSeconds: number | null;
+  gainDb: number;
+  pan: number;
+  durationSeconds: number;
+  waveform: number[];
+  mimeType: string;
+  codec: string;
+  metadata: Record<string, unknown>;
+  audioUrl: string;
+};
+type StudioVersion = {
+  id: string;
+  version: number;
+  duration: number;
+  bpm: number;
+  musicalKey: string;
+  scale: string;
+  prompt: string;
+  provider: string;
+  providerModel: string;
+  seed: number;
+  createdAt: string;
+  audioAssetId: string | null;
+  waveform: number[];
+  audioUrl?: string;
+  assets: TrackAsset[];
+};
+type SongWorkspace = {
+  song: {
+    id: string;
+    title: string;
+    description: string;
+    lyrics: string;
+    isInstrumental: boolean;
+    createdAt: string;
+  };
+  versions: StudioVersion[];
 };
 type User = { id: string; email: string; displayName: string };
 type ProviderStatus = {
@@ -213,6 +263,41 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number) {
   }
   return new Blob([buffer], { type: "audio/wav" });
 }
+function encodeStereoPcm16Wav(buffer: AudioBuffer) {
+  const channels = 2,
+    frameCount = buffer.length,
+    bytes = new ArrayBuffer(44 + frameCount * channels * 2),
+    view = new DataView(bytes),
+    left = buffer.getChannelData(0),
+    right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left,
+    write = (offset: number, value: string) => {
+      for (let index = 0; index < value.length; index += 1)
+        view.setUint8(offset + index, value.charCodeAt(index));
+    };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + frameCount * channels * 2, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * channels * 2, true);
+  view.setUint16(32, channels * 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, frameCount * channels * 2, true);
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const frameSamples = [left[frame], right[frame]];
+    for (let channel = 0; channel < channels; channel += 1) {
+      const sample = frameSamples[channel];
+      const bounded = Math.max(-1, Math.min(1, sample)),
+        offset = 44 + (frame * channels + channel) * 2;
+      view.setInt16(offset, bounded < 0 ? bounded * 0x8000 : bounded * 0x7fff, true);
+    }
+  }
+  return new Blob([bytes], { type: "audio/wav" });
+}
 const paths: Record<string, string> = {
   create: "M12 3v18M3 12h18",
   library: "M4 5v14M9 5v14M14 7v12M19 4v15",
@@ -382,7 +467,9 @@ export default function StudioApp() {
       available: false,
       masterGeneration: "UNAVAILABLE",
     }),
-    [view, setView] = useState<"create" | "library" | "voice">("create"),
+    [view, setView] = useState<"create" | "library" | "tracks" | "voice">(
+      "create",
+    ),
     [mode, setMode] = useState<"Simple" | "Advanced">("Simple"),
     [prompt, setPrompt] = useState(
       "Warm neo-soul song about finding purpose later in life",
@@ -423,6 +510,9 @@ export default function StudioApp() {
     ),
     [recordingSeconds, setRecordingSeconds] = useState(0),
     [active, setActive] = useState<Song | null>(null),
+    [songWorkspace, setSongWorkspace] = useState<SongWorkspace | null>(null),
+    [workspaceBusy, setWorkspaceBusy] = useState(false),
+    [workspaceError, setWorkspaceError] = useState(""),
     [repairSong, setRepairSong] = useState<Song | null>(null),
     [repairImportOpen, setRepairImportOpen] = useState(false),
     [playing, setPlaying] = useState(false),
@@ -565,6 +655,36 @@ export default function StudioApp() {
       setActive(song);
       setTime(0);
       setPlaying(true);
+    }
+  }
+  async function openWorkspace(song: Song) {
+    setPlaying(false);
+    setWorkspaceError("");
+    setSongWorkspace(null);
+    setView("tracks");
+    if (!song.songId) {
+      setWorkspaceError(
+        "This older library entry is missing its song link. Refresh the library and try again.",
+      );
+      return;
+    }
+    setWorkspaceBusy(true);
+    try {
+      const res = await fetch(`/api/songs/${song.songId}`, {
+          cache: "no-store",
+        }),
+        data = (await res.json()) as SongWorkspace & {
+          error?: { message: string };
+        };
+      if (!res.ok || !data.song)
+        throw new Error(data.error?.message || "Could not open this song.");
+      setSongWorkspace(data);
+    } catch (err) {
+      setWorkspaceError(
+        err instanceof Error ? err.message : "Could not open this song.",
+      );
+    } finally {
+      setWorkspaceBusy(false);
     }
   }
   async function generate() {
@@ -1207,7 +1327,9 @@ export default function StudioApp() {
                 ? "Create"
                 : view === "library"
                   ? "Your library"
-                  : "Artist voice"}
+                  : view === "tracks"
+                    ? "Multitrack workspace"
+                    : "Artist voice"}
             </h1>
           </div>
           <div className="provider" title={provider.model}>
@@ -1429,6 +1551,7 @@ export default function StudioApp() {
                       playing={playing}
                       time={time}
                       onPlay={play}
+                      onOpen={(song) => void openWorkspace(song)}
                       onRepair={(song) => {
                         setPlaying(false);
                         setRepairSong(song);
@@ -1485,6 +1608,13 @@ export default function StudioApp() {
                       {s.genre} · V{s.version}
                     </p>
                     <small>{new Date(s.createdAt).toLocaleString()}</small>
+                    <button
+                      className="library-open"
+                      disabled={s.status !== "COMPLETE"}
+                      onClick={() => void openWorkspace(s)}
+                    >
+                      Open tracks
+                    </button>
                   </article>
                 ))}
               </div>
@@ -1494,6 +1624,33 @@ export default function StudioApp() {
                 <p>Try another search or create your first song.</p>
               </div>
             )}
+          </section>
+        ) : view === "tracks" ? (
+          <section className="tracks-view">
+            {workspaceBusy ? (
+              <div className="tracks-loading" role="status">
+                <i />
+                <h2>Opening song workspace…</h2>
+                <p>Loading versions and synchronized audio assets.</p>
+              </div>
+            ) : workspaceError ? (
+              <div className="empty tracks-error" role="alert">
+                <h3>Could not open the workspace</h3>
+                <p>{workspaceError}</p>
+                <button onClick={() => setView("library")}>Back to library</button>
+              </div>
+            ) : songWorkspace ? (
+              <MultitrackWorkspace
+                data={songWorkspace}
+                onClose={() => setView("library")}
+                onRefresh={async () => {
+                  const res = await fetch(`/api/songs/${songWorkspace.song.id}`, {
+                    cache: "no-store",
+                  });
+                  if (res.ok) setSongWorkspace((await res.json()) as SongWorkspace);
+                }}
+              />
+            ) : null}
           </section>
         ) : (
           <section className="voice-view">
@@ -1867,7 +2024,9 @@ export default function StudioApp() {
           </section>
         )}
       </main>
-      <footer className={`player ${active ? "visible" : ""}`}>
+      <footer
+        className={`player ${active && view !== "tracks" ? "visible" : ""}`}
+      >
         {/* Music is instrumental/generated; captions are not applicable. */}
         <audio
           ref={audio}
@@ -2631,6 +2790,592 @@ function PhraseRepairModal({
   );
 }
 
+function MultitrackWorkspace({
+  data,
+  onClose,
+  onRefresh,
+}: {
+  data: SongWorkspace;
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [versionId, setVersionId] = useState(data.versions[0]?.id || ""),
+    [playing, setPlaying] = useState(false),
+    [position, setPosition] = useState(0),
+    [muted, setMuted] = useState<Record<string, boolean>>({}),
+    [soloed, setSoloed] = useState<Record<string, boolean>>({}),
+    [levels, setLevels] = useState<Record<string, number>>({}),
+    [pans, setPans] = useState<Record<string, number>>({}),
+    [separation, setSeparation] = useState<{
+      jobId: string;
+      status: "QUEUED" | "PROCESSING" | "COMPLETE" | "FAILED";
+      progress: number;
+      message: string;
+      errorCode?: string;
+    } | null>(null),
+    [separationError, setSeparationError] = useState("");
+  const [mixBusy, setMixBusy] = useState<"" | "saving" | "rendering">(""),
+    [mixNotice, setMixNotice] = useState(""),
+    [mixError, setMixError] = useState("");
+  const elements = useRef<Record<string, HTMLAudioElement | null>>({}),
+    context = useRef<AudioContext | null>(null),
+    nodes = useRef<
+      Record<
+        string,
+        {
+          source: MediaElementAudioSourceNode;
+          gain: GainNode;
+          panner: StereoPannerNode;
+        }
+      >
+    >({}),
+    frame = useRef<number | null>(null),
+    positionRef = useRef(0),
+    clockStart = useRef(0),
+    started = useRef(new Set<string>());
+  const version =
+      data.versions.find((item) => item.id === versionId) || data.versions[0],
+    tracks = useMemo(() => {
+      if (!version) return [];
+      const stems = version.assets.filter((asset) =>
+        ["NATIVE_TRACK", "DERIVED_STEM"].includes(asset.role),
+      );
+      if (stems.length) return stems;
+      const premaster = version.assets.find(
+        (asset) => asset.role === "PREMASTER" && !asset.isPrimary,
+      );
+      const master = version.assets.find(
+        (asset) => asset.isPrimary || asset.role === "MASTER",
+      );
+      return premaster ? [premaster] : master ? [master] : version.assets.slice(0, 1);
+    }, [version]),
+    hasStems = tracks.length > 1,
+    anySolo = tracks.some(
+      (track) => soloed[track.id] ?? Boolean(track.metadata?.soloed),
+    );
+  const formatTime = (seconds: number) =>
+    `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
+      .toString()
+      .padStart(2, "0")}`;
+  function pauseElements() {
+    Object.values(elements.current).forEach((element) => element?.pause());
+  }
+  function isMuted(track: TrackAsset) {
+    return muted[track.id] ?? Boolean(track.metadata?.muted);
+  }
+  function isSoloed(track: TrackAsset) {
+    return soloed[track.id] ?? Boolean(track.metadata?.soloed);
+  }
+  function effectiveGain(track: TrackAsset) {
+    if (isMuted(track) || (anySolo && !isSoloed(track))) return 0;
+    return 10 ** ((levels[track.id] ?? track.gainDb ?? 0) / 20);
+  }
+  function currentSettings() {
+    return tracks.map((track) => ({
+      trackId: track.id,
+      gainDb: levels[track.id] ?? track.gainDb ?? 0,
+      pan: pans[track.id] ?? track.pan ?? 0,
+      muted: isMuted(track),
+      soloed: isSoloed(track),
+    }));
+  }
+  function applyMix() {
+    for (const track of tracks) {
+      const graph = nodes.current[track.id];
+      if (!graph) continue;
+      graph.gain.gain.value = effectiveGain(track);
+      graph.panner.pan.value = pans[track.id] ?? track.pan ?? 0;
+    }
+  }
+  async function ensureAudioGraph() {
+    const audioContext = context.current || new AudioContext();
+    context.current = audioContext;
+    if (audioContext.state === "suspended") await audioContext.resume();
+    for (const track of tracks) {
+      const element = elements.current[track.id];
+      if (!element || nodes.current[track.id]) continue;
+      const source = audioContext.createMediaElementSource(element),
+        gain = audioContext.createGain(),
+        panner = audioContext.createStereoPanner();
+      source.connect(gain).connect(panner).connect(audioContext.destination);
+      nodes.current[track.id] = { source, gain, panner };
+    }
+    applyMix();
+  }
+  async function togglePlayback() {
+    if (!version) return;
+    if (playing) {
+      setPlaying(false);
+      pauseElements();
+      return;
+    }
+    await ensureAudioGraph();
+    if (positionRef.current >= version.duration - 0.01) {
+      positionRef.current = 0;
+      setPosition(0);
+    }
+    clockStart.current = performance.now() - positionRef.current * 1000;
+    started.current.clear();
+    setPlaying(true);
+  }
+  async function startSeparation() {
+    if (!version) return;
+    setSeparationError("");
+    const response = await fetch(
+        `/api/songs/${data.song.id}/versions/${version.id}/separation`,
+        { method: "POST" },
+      ),
+      payload = (await response.json()) as {
+        job?: {
+          jobId: string;
+          status: "QUEUED" | "PROCESSING" | "COMPLETE" | "FAILED";
+          progress: number;
+          message: string;
+          errorCode?: string;
+        };
+        error?: { message: string };
+      };
+    if (!response.ok || !payload.job) {
+      setSeparationError(payload.error?.message || "Stem separation could not start.");
+      return;
+    }
+    setSeparation(payload.job);
+    if (payload.job.status === "COMPLETE") await onRefresh();
+  }
+  async function saveMixSettings() {
+    if (!version || !tracks.length) return;
+    setMixBusy("saving");
+    setMixError("");
+    setMixNotice("");
+    try {
+      const response = await fetch(
+          `/api/songs/${data.song.id}/versions/${version.id}/mix`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ settings: currentSettings() }),
+          },
+        ),
+        payload = (await response.json()) as {
+          saved?: boolean;
+          error?: { message: string };
+        };
+      if (!response.ok || !payload.saved)
+        throw new Error(payload.error?.message || "Mixer settings could not be saved.");
+      setMixNotice("Mixer settings saved to this version.");
+      await onRefresh();
+    } catch (error) {
+      setMixError(error instanceof Error ? error.message : "Mixer settings could not be saved.");
+    } finally {
+      setMixBusy("");
+    }
+  }
+  async function renderMix() {
+    if (!version || !tracks.length) return;
+    setMixBusy("rendering");
+    setMixError("");
+    setMixNotice("Decoding private tracks…");
+    setPlaying(false);
+    pauseElements();
+    try {
+      const sampleRate = 48000,
+        renderer = new OfflineAudioContext(
+          2,
+          Math.ceil(version.duration * sampleRate),
+          sampleRate,
+        );
+      for (const track of tracks) {
+        const response = await fetch(track.audioUrl, { cache: "no-store" });
+        if (!response.ok) throw new Error(`Could not load ${track.instrument || track.role}.`);
+        const decoded = await renderer.decodeAudioData(await response.arrayBuffer()),
+          source = renderer.createBufferSource(),
+          gain = renderer.createGain(),
+          panner = renderer.createStereoPanner(),
+          offset = Math.max(0, track.sourceStartSeconds),
+          available = Math.max(
+            0,
+            Math.min(
+              decoded.duration - offset,
+              (track.sourceEndSeconds ?? decoded.duration) - offset,
+              version.duration - track.timelineStartSeconds,
+            ),
+          );
+        source.buffer = decoded;
+        gain.gain.value = effectiveGain(track);
+        panner.pan.value = pans[track.id] ?? track.pan ?? 0;
+        source.connect(gain).connect(panner).connect(renderer.destination);
+        if (available > 0) source.start(track.timelineStartSeconds, offset, available);
+      }
+      setMixNotice("Rendering the new stereo mix…");
+      const rendered = await renderer.startRendering(),
+        blob = encodeStereoPcm16Wav(rendered),
+        form = new FormData();
+      form.set("audio", new File([blob], `dozi-mix-v${version.version + 1}.wav`, { type: "audio/wav" }));
+      form.set("settings", JSON.stringify(currentSettings()));
+      setMixNotice("Saving the new version securely…");
+      const response = await fetch(
+          `/api/songs/${data.song.id}/versions/${version.id}/mix`,
+          { method: "POST", body: form },
+        ),
+        responseText = await response.text();
+      let payload: {
+          version?: { id: string; version: number };
+          error?: { message: string };
+        } = {};
+      try {
+        payload = JSON.parse(responseText) as typeof payload;
+      } catch {
+        if (response.status === 413)
+          throw new Error(
+            "This mix is too large for the server upload limit. Restart Dozi to load the current upload configuration, then try again.",
+          );
+        throw new Error(
+          response.ok
+            ? "The server returned an unreadable response while saving the mix."
+            : responseText.trim() || "The new mix could not be saved.",
+        );
+      }
+      if (!response.ok || !payload.version)
+        throw new Error(payload.error?.message || "The new mix could not be saved.");
+      await onRefresh();
+      selectVersion(payload.version.id);
+      setMixNotice(`Version ${payload.version.version} rendered and saved.`);
+    } catch (error) {
+      setMixError(error instanceof Error ? error.message : "The new mix could not be rendered.");
+      setMixNotice("");
+    } finally {
+      setMixBusy("");
+    }
+  }
+  function seek(next: number) {
+    const bounded = Math.max(0, Math.min(version?.duration || 0, next));
+    pauseElements();
+    started.current.clear();
+    positionRef.current = bounded;
+    setPosition(bounded);
+    if (playing) clockStart.current = performance.now() - bounded * 1000;
+  }
+  function selectVersion(nextVersionId: string) {
+    pauseElements();
+    started.current.clear();
+    positionRef.current = 0;
+    setPosition(0);
+    setPlaying(false);
+    setMuted({});
+    setSoloed({});
+    setLevels({});
+    setPans({});
+    setVersionId(nextVersionId);
+  }
+  useEffect(() => {
+    for (const track of tracks) {
+      const graph = nodes.current[track.id];
+      if (!graph) continue;
+      const trackMuted = muted[track.id] ?? Boolean(track.metadata?.muted),
+        trackSoloed = soloed[track.id] ?? Boolean(track.metadata?.soloed),
+        audible = !trackMuted && (!anySolo || trackSoloed);
+      graph.gain.gain.value = audible
+        ? 10 ** ((levels[track.id] ?? track.gainDb ?? 0) / 20)
+        : 0;
+      graph.panner.pan.value = pans[track.id] ?? track.pan ?? 0;
+    }
+  }, [muted, soloed, levels, pans, anySolo, tracks]);
+  useEffect(() => {
+    if (!playing || !version) return;
+    const tick = () => {
+      const current = (performance.now() - clockStart.current) / 1000;
+      if (current >= version.duration) {
+        positionRef.current = version.duration;
+        setPosition(version.duration);
+        setPlaying(false);
+        pauseElements();
+        return;
+      }
+      positionRef.current = current;
+      setPosition(current);
+      for (const track of tracks) {
+        const element = elements.current[track.id],
+          playableDuration = Math.max(
+            0,
+            (track.sourceEndSeconds ?? track.durationSeconds) -
+              track.sourceStartSeconds,
+          ),
+          trackEnd = track.timelineStartSeconds + playableDuration,
+          shouldRun =
+            current >= track.timelineStartSeconds && current < trackEnd;
+        if (!element) continue;
+        if (shouldRun) {
+          const sourceTime =
+            track.sourceStartSeconds + current - track.timelineStartSeconds;
+          if (!started.current.has(track.id)) {
+            element.currentTime = sourceTime;
+            started.current.add(track.id);
+            void element.play().catch(() => setPlaying(false));
+          } else if (Math.abs(element.currentTime - sourceTime) > 0.12) {
+            element.currentTime = sourceTime;
+          }
+        } else if (started.current.has(track.id)) {
+          element.pause();
+          started.current.delete(track.id);
+        }
+      }
+      frame.current = requestAnimationFrame(tick);
+    };
+    frame.current = requestAnimationFrame(tick);
+    return () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+    };
+  }, [playing, tracks, version]);
+  useEffect(() => {
+    if (!separation || !["QUEUED", "PROCESSING"].includes(separation.status)) return;
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(
+            `/api/songs/${data.song.id}/versions/${version.id}/separation?jobId=${encodeURIComponent(separation.jobId)}`,
+            { cache: "no-store" },
+          ),
+          payload = (await response.json()) as {
+            job?: typeof separation;
+            error?: { message: string };
+          };
+        if (!response.ok || !payload.job)
+          throw new Error(payload.error?.message || "Could not check separation progress.");
+        setSeparation(payload.job);
+        if (payload.job.status === "COMPLETE") await onRefresh();
+        if (payload.job.status === "FAILED")
+          setSeparationError("Stem separation did not finish. You can safely retry.");
+      } catch (error) {
+        setSeparationError(
+          error instanceof Error ? error.message : "Could not check separation progress.",
+        );
+        setSeparation((current) =>
+          current ? { ...current, status: "FAILED", progress: 0 } : current,
+        );
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [separation, data.song.id, version.id, onRefresh]);
+  useEffect(
+    () => () => {
+      pauseElements();
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      if (context.current) void context.current.close();
+    },
+    [],
+  );
+  if (!version)
+    return (
+      <div className="empty tracks-error">
+        <h3>No completed versions yet</h3>
+        <p>This song will become editable after generation finishes.</p>
+        <button onClick={onClose}>Back to library</button>
+      </div>
+    );
+  return (
+    <div className="mixer">
+      <div className="mixer-head">
+        <button className="mixer-back" onClick={onClose}>
+          ← Library
+        </button>
+        <div>
+          <small>SONG WORKSPACE</small>
+          <h2>{data.song.title}</h2>
+          <p>
+            {version.bpm} BPM · {version.musicalKey} {version.scale} · {version.provider}
+          </p>
+        </div>
+        <label>
+          VERSION
+          <select
+            value={version.id}
+            onChange={(event) => selectVersion(event.target.value)}
+          >
+            {data.versions.map((item) => (
+              <option key={item.id} value={item.id}>
+                Version {item.version}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="mixer-transport">
+        <button
+          className="mixer-play"
+          aria-label={playing ? "Pause all tracks" : "Play all tracks"}
+          onClick={() => void togglePlayback()}
+        >
+          <Icon name={playing ? "pause" : "play"} />
+        </button>
+        <span>{formatTime(position)}</span>
+        <input
+          aria-label="Song position"
+          type="range"
+          min="0"
+          max={version.duration}
+          step="0.01"
+          value={position}
+          onChange={(event) => seek(Number(event.target.value))}
+        />
+        <span>{formatTime(version.duration)}</span>
+      </div>
+      {!hasStems && (
+        <div className="master-only-note">
+          <div>
+            <strong>Finished master only</strong>
+            <span>
+              Create derived stems for editing. Separation can contain leakage or artifacts, so Dozi does not describe these as pristine studio tracks.
+            </span>
+          </div>
+          <button
+            disabled={!!separation && ["QUEUED", "PROCESSING"].includes(separation.status)}
+            onClick={() => void startSeparation()}
+          >
+            {separation && ["QUEUED", "PROCESSING"].includes(separation.status)
+              ? "Separating…"
+              : separation?.status === "FAILED"
+                ? "Retry separation"
+                : "Separate into tracks"}
+          </button>
+        </div>
+      )}
+      {separation && ["QUEUED", "PROCESSING"].includes(separation.status) && (
+        <div className="separation-progress" role="status">
+          <progress max="100" value={separation.progress} />
+          <span>{separation.message} · {separation.progress}%</span>
+        </div>
+      )}
+      {separationError && <p className="separation-error" role="alert">{separationError}</p>}
+      <div className="track-list">
+        {tracks.map((track, index) => {
+          const name =
+            track.instrument ||
+            (track.role === "MASTER"
+              ? "Master"
+              : track.role.toLowerCase().replaceAll("_", " "));
+          return (
+            <article className="track-row" key={track.id} data-tone={index % 5}>
+              <audio
+                ref={(element) => {
+                  elements.current[track.id] = element;
+                }}
+                src={track.audioUrl}
+                preload="metadata"
+              />
+              <i className="track-color" />
+              <div className="track-buttons">
+                <button
+                  className={isMuted(track) ? "active" : ""}
+                  aria-label={`Mute ${name}`}
+                  onClick={() =>
+                    setMuted((values) => ({
+                      ...values,
+                      [track.id]: !(values[track.id] ?? Boolean(track.metadata?.muted)),
+                    }))
+                  }
+                >
+                  M
+                </button>
+                <button
+                  className={isSoloed(track) ? "active" : ""}
+                  aria-label={`Solo ${name}`}
+                  onClick={() =>
+                    setSoloed((values) => ({
+                      ...values,
+                      [track.id]: !(values[track.id] ?? Boolean(track.metadata?.soloed)),
+                    }))
+                  }
+                >
+                  S
+                </button>
+              </div>
+              <div className="track-name">
+                <strong>{name}</strong>
+                <small>{track.role.toLowerCase().replaceAll("_", " ")}</small>
+                <a href={track.audioUrl} download={`${data.song.title}-${name}.wav`}>
+                  Export stem
+                </a>
+              </div>
+              <Wave
+                compact
+                data={track.waveform || []}
+                progress={position / version.duration}
+                onSeek={(fraction) => seek(fraction * version.duration)}
+              />
+              <label className="track-control">
+                LEVEL
+                <input
+                  aria-label={`${name} level`}
+                  type="range"
+                  min="-60"
+                  max="6"
+                  step="0.5"
+                  value={levels[track.id] ?? track.gainDb ?? 0}
+                  onChange={(event) =>
+                    setLevels((values) => ({
+                      ...values,
+                      [track.id]: Number(event.target.value),
+                    }))
+                  }
+                />
+                <span>{(levels[track.id] ?? track.gainDb ?? 0).toFixed(1)} dB</span>
+              </label>
+              <label className="track-control pan-control">
+                PAN
+                <input
+                  aria-label={`${name} pan`}
+                  type="range"
+                  min="-1"
+                  max="1"
+                  step="0.05"
+                  value={pans[track.id] ?? track.pan ?? 0}
+                  onChange={(event) =>
+                    setPans((values) => ({
+                      ...values,
+                      [track.id]: Number(event.target.value),
+                    }))
+                  }
+                />
+                <span>
+                  {(pans[track.id] ?? track.pan ?? 0) === 0
+                    ? "C"
+                    : (pans[track.id] ?? track.pan ?? 0) < 0
+                      ? `L${Math.round(Math.abs(pans[track.id] ?? track.pan ?? 0) * 100)}`
+                      : `R${Math.round((pans[track.id] ?? track.pan ?? 0) * 100)}`}
+                </span>
+              </label>
+            </article>
+          );
+        })}
+      </div>
+      {hasStems && (
+        <div className="mixer-actions">
+          <button disabled={!!mixBusy} onClick={() => void saveMixSettings()}>
+            {mixBusy === "saving" ? "Saving…" : "Save mixer settings"}
+          </button>
+          <button
+            className="render-mix"
+            disabled={!!mixBusy}
+            onClick={() => void renderMix()}
+          >
+            {mixBusy === "rendering" ? "Rendering…" : "Render new mix version"}
+          </button>
+          {version.audioUrl && (
+            <a href={version.audioUrl} download={`${data.song.title}-v${version.version}.wav`}>
+              Download current mix
+            </a>
+          )}
+        </div>
+      )}
+      {mixNotice && <p className="mix-notice" role="status">{mixNotice}</p>}
+      {mixError && <p className="mix-error" role="alert">{mixError}</p>}
+      <p className="mixer-footnote">
+        Mixer moves are non-destructive. Saving or rendering a new version leaves the source assets unchanged.
+      </p>
+    </div>
+  );
+}
+
 function SongCard({
   song: s,
   tone,
@@ -2638,6 +3383,7 @@ function SongCard({
   playing,
   time,
   onPlay,
+  onOpen,
   onRepair,
   onSeek,
 }: {
@@ -2647,6 +3393,7 @@ function SongCard({
   playing: boolean;
   time: number;
   onPlay: (s: Song) => void;
+  onOpen: (s: Song) => void;
   onRepair: (s: Song) => void;
   onSeek: (p: number) => void;
 }) {
@@ -2715,6 +3462,13 @@ function SongCard({
           <span>V{s.version}</span>
           <span>{fmt(s.duration)}</span>
           <span>Seed {s.seed}</span>
+          <button
+            className="remix open-tracks"
+            disabled={s.status !== "COMPLETE"}
+            onClick={() => onOpen(s)}
+          >
+            Open tracks
+          </button>
           <button
             className="remix"
             disabled={s.status !== "COMPLETE" || !s.audioUrl}

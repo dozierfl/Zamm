@@ -17,4 +17,4 @@ ACE-Step runs as an independently managed official service. The Dozi FastAPI gat
 
 Contextual-track generation extends the provider boundary with a typed optional operation while retaining `GenerationResult`. Lineage is explicit on the version-to-asset mapping through `sourceAssetId` and `generationMethod`; source asset, output asset, version, and generation job remain independently queryable.
 
-The primary product remains master-based. Contextual generation is classified as creative regeneration, while extraction and separation are classified as derived-stem workflows. Current R&D does not justify production-quality stem or mixer claims; see ADR 0003.
+The primary product remains master-based. Contextual generation is classified as creative regeneration, while extraction and separation are classified as derived-stem workflows. The development mixer may use explicitly labeled derived stems as editing aids and creates non-destructive child versions; it does not make production-quality isolation claims. See ADR 0003 and ADR 0005.

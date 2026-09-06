@@ -29,6 +29,8 @@ test("Worker routes pass the PostgreSQL binding through authentication", async (
     "generations/[id]",
     "audio/[id]",
     "songs/[id]",
+    "songs/[id]/versions/[versionId]/separation",
+    "songs/[id]/versions/[versionId]/mix",
     "vocal-profiles",
     "vocal-profiles/[id]/challenge",
     "vocal-profiles/[id]/challenge/[verificationId]/recording",
@@ -48,6 +50,16 @@ test("Worker routes pass the PostgreSQL binding through authentication", async (
     assert.match(source, /env|bindings/);
     assert.match(source, /DATABASE_URL/);
   }
+});
+test("private audio materializes R2 ranges before browser playback", async () => {
+  const route = await readFile(
+    new URL("../app/api/audio/[id]/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /owner_id=\$\{user\.id\}/);
+  assert.match(route, /range: \{ offset: start, length: end - start \+ 1 \}/);
+  assert.match(route, /await object\.arrayBuffer\(\)/);
+  assert.doesNotMatch(route, /new Response\(object\.body/);
 });
 test("local queue executes without any status read", async () => {
   let delivered = "";
@@ -359,6 +371,96 @@ test("vocal phrase repairs are private, version-bound, and non-destructive", asy
   assert.match(studio, /Import aligned original vocal stem/);
   assert.match(studio, /Import vocal for repair/);
   assert.match(studio, /Render repair preview/);
+});
+test("song workspace returns owner-scoped versions and normalized track assets", async () => {
+  const [songsRoute, generationsRoute, generationRoute] = await Promise.all([
+    readFile(new URL("../app/api/songs/[id]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/generations/route.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/api/generations/[id]/route.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(songsRoute, /where id=\$\{id\} and user_id=\$\{user\.id\}/);
+  assert.match(songsRoute, /from version_assets va/);
+  assert.match(songsRoute, /a\.owner_id=\$\{user\.id\}/);
+  assert.match(songsRoute, /timeline_start_seconds as "timelineStartSeconds"/);
+  assert.match(songsRoute, /source_start_seconds as "sourceStartSeconds"/);
+  assert.match(songsRoute, /gain_db as "gainDb"/);
+  assert.match(songsRoute, /va\.pan/);
+  assert.match(songsRoute, /assets:assets\.filter/);
+  assert.match(generationsRoute, /s\.id as "songId"/);
+  assert.match(generationRoute, /s\.id as "songId"/);
+});
+test("multitrack workspace synchronizes assets without doubling the master", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /Multitrack workspace/);
+  assert.match(studio, /Open tracks/);
+  assert.match(studio, /\["NATIVE_TRACK", "DERIVED_STEM"\]/);
+  assert.match(studio, /createMediaElementSource/);
+  assert.match(studio, /createStereoPanner/);
+  assert.match(studio, /Mute \$\{name\}/);
+  assert.match(studio, /Solo \$\{name\}/);
+  assert.match(studio, /aria-label=\{`\$\{name\} level`\}/);
+  assert.match(studio, /aria-label=\{`\$\{name\} pan`\}/);
+  assert.match(studio, /timelineStartSeconds/);
+  assert.match(studio, /sourceStartSeconds/);
+  assert.match(studio, /Finished master only/);
+  assert.match(studio, /source assets unchanged/);
+});
+test("derived-stem separation is asynchronous, private, and source-linked", async () => {
+  const [gateway, route, studio] = await Promise.all([
+    readFile(new URL("../ai-service/app/main.py", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../app/api/songs/[id]/versions/[versionId]/separation/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(gateway, /asyncio\.create_task/);
+  assert.match(gateway, /bs-roformer-infer/);
+  assert.match(gateway, /SEPARATOR_STEMS=.*vocals.*drums.*bass.*guitar.*piano.*other/);
+  assert.match(route, /requireUser/);
+  assert.match(route, /a\.owner_id=s\.user_id/);
+  assert.match(route, /source_asset_id/);
+  assert.match(route, /'SEPARATION'/);
+  assert.match(route, /'DERIVED_STEM'/);
+  assert.match(route, /'SEPARATED'/);
+  assert.match(studio, /Separate into tracks/);
+  assert.match(studio, /separation\.message/);
+  assert.match(studio, /does not describe these as pristine studio tracks/);
+});
+test("mixer settings and rendered versions remain owner-scoped and non-destructive", async () => {
+  const [route, studio] = await Promise.all([
+    readFile(
+      new URL(
+        "../app/api/songs/[id]/versions/[versionId]/mix/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(route, /s\.user_id=\$\{userId\}/);
+  assert.match(route, /operation_type[\s\S]*MIX_RENDER/);
+  assert.match(route, /parent_version_id/);
+  assert.match(route, /next_version_number[\s\S]*for update/);
+  assert.match(route, /sourceVersionId: versionId, nonDestructive: true/);
+  assert.match(route, /metadata=metadata\|\|/);
+  assert.match(studio, /OfflineAudioContext/);
+  assert.match(studio, /encodeStereoPcm16Wav/);
+  assert.match(studio, /Save mixer settings/);
+  assert.match(studio, /Render new mix version/);
+  assert.match(studio, /response\.status === 413/);
+  assert.match(studio, /leaves the source assets unchanged/);
+  assert.match(studio, /Export stem/);
+  assert.match(studio, /Download current mix/);
 });
 test("ACE-Step selection stays behind the provider-neutral gateway", () => {
   const provider = createProvider("acestep", {
