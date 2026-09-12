@@ -597,6 +597,39 @@ test("Return moves the active Create or Library song back to the start", async (
   assert.match(studio, /audio\.current\.currentTime = 0/);
   assert.match(studio, /window\.addEventListener\("keydown", returnToSongStart, true\)/);
 });
+test("the main player keeps keyboard transport consistent outside the mixer", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /event\.code === "Space"/);
+  assert.match(studio, /setPlaybackNotice/);
+  assert.match(studio, /This private audio could not load/);
+  assert.match(studio, /player-notice/);
+});
+test("exports identify stored audio formats and private source lineage", async () => {
+  const studio = await readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+    workspace = await readFile(new URL("../app/api/songs/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(studio, /PRIVATE DELIVERY/);
+  assert.match(studio, /Export stem/);
+  assert.match(studio, /Download current mix \(saved master\)/);
+  assert.match(studio, /Download delivery manifest/);
+  assert.match(studio, /Download \{tracks\.length\} source tracks/);
+  assert.match(studio, /audioExtension/);
+  assert.match(studio, /sourceLabel/);
+  assert.match(workspace, /a\.mime_type as "mimeType",a\.codec/);
+});
+test("the Library includes a private listening-quality benchmark", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /QUALITY BENCHMARK/);
+  assert.match(studio, /dozi:quality-reviews:/);
+  assert.match(studio, /Review quality/);
+  assert.match(studio, /Save private review/);
+  assert.match(studio, /Artifact control/);
+});
 test("the library sort control reorders the visible song list", async () => {
   const studio = await readFile(
     new URL("../app/studio-app.tsx", import.meta.url),

@@ -38,6 +38,17 @@ type Song = {
   audioUrl?: string;
   errorMessage?: string;
 };
+type QualityScoreKey =
+  | "fidelity"
+  | "musicality"
+  | "vocalQuality"
+  | "promptFit"
+  | "artifactControl";
+type QualityReview = Record<QualityScoreKey, number> & {
+  notes: string;
+  reviewedAt: string;
+};
+type QualityReviewDraft = Omit<QualityReview, "reviewedAt">;
 type TrackAsset = {
   id: string;
   audioAssetId: string;
@@ -72,6 +83,8 @@ type StudioVersion = {
   seed: number;
   createdAt: string;
   audioAssetId: string | null;
+  mimeType?: string;
+  codec?: string;
   waveform: number[];
   audioUrl?: string;
   assets: TrackAsset[];
@@ -335,6 +348,47 @@ const labels: Record<Status, string> = {
   FAILED: "Generation failed",
   CANCELLED: "Cancelled",
 };
+const qualityDimensions: Array<{ key: QualityScoreKey; label: string }> = [
+  { key: "fidelity", label: "Sound fidelity" },
+  { key: "musicality", label: "Musicality & arrangement" },
+  { key: "vocalQuality", label: "Vocal quality" },
+  { key: "promptFit", label: "Brief, key & tempo fit" },
+  { key: "artifactControl", label: "Artifact control" },
+];
+function emptyQualityReview(): QualityReviewDraft {
+  return {
+    fidelity: 4,
+    musicality: 4,
+    vocalQuality: 4,
+    promptFit: 4,
+    artifactControl: 4,
+    notes: "",
+  };
+}
+function qualityScore(review: QualityReview | QualityReviewDraft) {
+  return Math.round(
+    (qualityDimensions.reduce((sum, { key }) => sum + review[key], 0) /
+      (qualityDimensions.length * 5)) *
+      100,
+  );
+}
+function audioExtension(mimeType?: string, codec?: string) {
+  const value = `${mimeType || ""} ${codec || ""}`.toLowerCase();
+  if (value.includes("mpeg") || value.includes("mp3")) return "mp3";
+  if (value.includes("flac")) return "flac";
+  if (value.includes("ogg") || value.includes("opus")) return "ogg";
+  if (value.includes("mp4") || value.includes("m4a") || value.includes("aac")) return "m4a";
+  if (value.includes("aiff")) return "aiff";
+  return "wav";
+}
+function sourceLabel(sourceType: string) {
+  if (sourceType === "DERIVED") return "Derived from the private master";
+  if (sourceType === "UPLOADED") return "Private aligned replacement";
+  if (sourceType === "GENERATED_NATIVE") return "Provider-native track";
+  if (sourceType === "SEPARATED") return "Derived from the private master";
+  if (sourceType === "RENDERED") return "Saved Dozi mix render";
+  return sourceType.toLowerCase().replaceAll("_", " ");
+}
 function Icon({ name }: { name: string }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -532,11 +586,29 @@ export default function StudioApp() {
     [libraryNotice, setLibraryNotice] = useState(""),
     [archiveCandidate, setArchiveCandidate] = useState<Song | null>(null),
     [archiveBusy, setArchiveBusy] = useState(false),
+    [qualityReviewStore, setQualityReviewStore] = useState<
+      Record<string, Record<string, QualityReview>>
+    >(() => {
+      if (typeof window === "undefined") return {};
+      try {
+        const saved = window.localStorage.getItem("dozi:quality-reviews:v1");
+        return saved
+          ? (JSON.parse(saved) as Record<string, Record<string, QualityReview>>)
+          : {};
+      } catch {
+        return {};
+      }
+    }),
+    [qualityCandidate, setQualityCandidate] = useState<Song | null>(null),
+    [qualityDraft, setQualityDraft] = useState<QualityReviewDraft>(
+      emptyQualityReview,
+    ),
     [repairSong, setRepairSong] = useState<Song | null>(null),
     [repairImportOpen, setRepairImportOpen] = useState(false),
     [songImportOpen, setSongImportOpen] = useState(false),
     [playing, setPlaying] = useState(false),
     [time, setTime] = useState(0),
+    [playbackNotice, setPlaybackNotice] = useState(""),
     [search, setSearch] = useState(""),
     [librarySort, setLibrarySort] = useState<"newest" | "oldest">("newest"),
     [librarySource, setLibrarySource] = useState<
@@ -547,6 +619,10 @@ export default function StudioApp() {
     [blueprint, setBlueprint] = useState(true),
     [submitting, setSubmitting] = useState(false),
     [notice, setNotice] = useState("");
+  const qualityReviews = useMemo(
+    () => (user ? qualityReviewStore[user.id] || {} : {}),
+    [qualityReviewStore, user],
+  );
   const audio = useRef<HTMLAudioElement | null>(null),
     pendingSongStart = useRef<number | null>(null),
     recorder = useRef<MediaRecorder | null>(null),
@@ -622,6 +698,12 @@ export default function StudioApp() {
       .catch(() => setUser(null));
   }, [loadProfiles, loadSongs]);
   useEffect(() => {
+    window.localStorage.setItem(
+      "dozi:quality-reviews:v1",
+      JSON.stringify(qualityReviewStore),
+    );
+  }, [qualityReviewStore]);
+  useEffect(() => {
     fetch("/api/providers", { cache: "no-store" })
       .then(
         async (r) =>
@@ -692,6 +774,7 @@ export default function StudioApp() {
       .padStart(2, "0")}`;
   function play(song: Song) {
     if (!song.audioUrl) return;
+    setPlaybackNotice("");
     pendingSongStart.current = null;
     const element = audio.current;
     if (active?.id === song.id) {
@@ -702,7 +785,10 @@ export default function StudioApp() {
         setPlaying(true);
         // Start within the button click itself so browsers treat this as a
         // user-initiated playback request instead of an autoplay attempt.
-        void element?.play().catch(() => setPlaying(false));
+        void element?.play().catch(() => {
+          setPlaying(false);
+          setPlaybackNotice("This private audio could not start. Check your connection, then try Play again; the song itself is unchanged.");
+        });
       }
       return;
     }
@@ -715,7 +801,10 @@ export default function StudioApp() {
       // here lets playback begin from the card's Play button gesture.
       element.src = song.audioUrl;
       element.currentTime = 0;
-      void element.play().catch(() => setPlaying(false));
+      void element.play().catch(() => {
+        setPlaying(false);
+        setPlaybackNotice("This private audio could not start. Check your connection, then try Play again; the song itself is unchanged.");
+      });
     }
   }
   function playFromSongWaveform(song: Song, fraction: number) {
@@ -739,6 +828,27 @@ export default function StudioApp() {
       void audio.current.play().catch(() => setPlaying(false));
     }
   }
+  useEffect(() => {
+    const isTextEntry = (target: EventTarget | null) =>
+      target instanceof Element &&
+      Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    const controlMainTransport = (event: KeyboardEvent) => {
+      if (
+        view === "tracks" || event.repeat || event.defaultPrevented ||
+        event.metaKey || event.ctrlKey || event.altKey || !active ||
+        isTextEntry(event.target) ||
+        document.querySelector('[role="dialog"][aria-modal="true"]')
+      ) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPlaybackNotice("");
+        setPlaying((current) => !current);
+      }
+    };
+    window.addEventListener("keydown", controlMainTransport, true);
+    return () => window.removeEventListener("keydown", controlMainTransport, true);
+  }, [active, view]);
   useEffect(() => {
     const returnToSongStart = (event: KeyboardEvent) => {
       if (
@@ -764,6 +874,7 @@ export default function StudioApp() {
       pendingSongStart.current = null;
       if (audio.current) audio.current.currentTime = 0;
       setTime(0);
+      setPlaybackNotice("");
     };
     window.addEventListener("keydown", returnToSongStart, true);
     return () => window.removeEventListener("keydown", returnToSongStart, true);
@@ -828,6 +939,40 @@ export default function StudioApp() {
     } finally {
       setArchiveBusy(false);
     }
+  }
+  function openQualityReview(song: Song) {
+    const existing = qualityReviews[song.id];
+    setQualityDraft(
+      existing
+        ? {
+            fidelity: existing.fidelity,
+            musicality: existing.musicality,
+            vocalQuality: existing.vocalQuality,
+            promptFit: existing.promptFit,
+            artifactControl: existing.artifactControl,
+            notes: existing.notes,
+          }
+        : emptyQualityReview(),
+    );
+    setQualityCandidate(song);
+  }
+  function saveQualityReview() {
+    if (!qualityCandidate || !user) return;
+    const score = qualityScore(qualityDraft);
+    setQualityReviewStore((current) => ({
+      ...current,
+      [user.id]: {
+        ...current[user.id],
+        [qualityCandidate.id]: {
+          ...qualityDraft,
+          reviewedAt: new Date().toISOString(),
+        },
+      },
+    }));
+    setLibraryNotice(
+      `${qualityCandidate.title} received a private quality score of ${score}/100.`,
+    );
+    setQualityCandidate(null);
   }
   async function generate() {
     if (
@@ -1468,6 +1613,24 @@ export default function StudioApp() {
     [songs, search, librarySort, librarySource],
   );
   const visibleLibrarySongs = filtered.slice(0, libraryVisibleCount);
+  const qualitySummary = useMemo(() => {
+    const reviewed = filtered.flatMap((song) => {
+      const review = qualityReviews[song.id];
+      return review ? [qualityScore(review)] : [];
+    });
+    return {
+      reviewed: reviewed.length,
+      average: reviewed.length
+        ? Math.round(reviewed.reduce((sum, score) => sum + score, 0) / reviewed.length)
+        : null,
+      nextSong: filtered.find(
+        (song) =>
+          song.status === "COMPLETE" &&
+          Boolean(song.audioUrl) &&
+          !qualityReviews[song.id],
+      ),
+    };
+  }, [filtered, qualityReviews]);
   if (user === undefined)
     return (
       <div className="boot">
@@ -1924,6 +2087,26 @@ export default function StudioApp() {
                 {libraryNotice}
               </p>
             )}
+            <aside className="quality-benchmark" aria-label="Quality benchmark">
+              <div>
+                <small>QUALITY BENCHMARK</small>
+                <strong>
+                  {qualitySummary.reviewed
+                    ? `${qualitySummary.average}/100 average · ${qualitySummary.reviewed} reviewed`
+                    : "No songs reviewed yet"}
+                </strong>
+                <p>
+                  Rate the sound after listening. Reviews are saved only in
+                  this browser and are never uploaded to Dozi. Use them to
+                  compare providers, profiles, and prompts.
+                </p>
+              </div>
+              {qualitySummary.nextSong && (
+                <button onClick={() => openQualityReview(qualitySummary.nextSong!)}>
+                  Review next song
+                </button>
+              )}
+            </aside>
             {filtered.length ? (
               <>
               <div className={`library-grid ${libraryView === "list" ? "list" : ""}`}>
@@ -1949,6 +2132,16 @@ export default function StudioApp() {
                     </p>
                     <small>{new Date(s.createdAt).toLocaleString()}</small>
                     <div className="library-card-actions">
+                      {s.status === "COMPLETE" && s.audioUrl && (
+                        <button
+                          className="library-review"
+                          onClick={() => openQualityReview(s)}
+                        >
+                          {qualityReviews[s.id]
+                            ? `Quality ${qualityScore(qualityReviews[s.id])}`
+                            : "Review quality"}
+                        </button>
+                      )}
                       <button
                         className="library-open"
                         disabled={s.status !== "COMPLETE"}
@@ -2416,6 +2609,10 @@ export default function StudioApp() {
           }}
           onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
           onEnded={() => setPlaying(false)}
+          onError={() => {
+            setPlaying(false);
+            setPlaybackNotice("This private audio could not load. Check your connection, then try Play again; the song itself is unchanged.");
+          }}
         />
         <div className="now">
           <div className="mini-cover">DZ</div>
@@ -2475,6 +2672,7 @@ export default function StudioApp() {
             }}
           />
         </div>
+        {playbackNotice && <p className="player-notice" role="alert">{playbackNotice}</p>}
       </footer>
       {repairSong && (
         <PhraseRepairModal
@@ -2523,6 +2721,63 @@ export default function StudioApp() {
             <button onClick={() => setProfileError("")}>
               Close
             </button>
+          </section>
+        </div>
+      )}
+      {qualityCandidate && (
+        <div className="error-modal-backdrop" role="presentation">
+          <section
+            className="quality-review-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quality-review-title"
+          >
+            <small>QUALITY BENCHMARK</small>
+            <h2 id="quality-review-title">Review {qualityCandidate.title}</h2>
+            <p>
+              Listen first, then score each area from 1 to 5. Five means the
+              result is excellent; for artifact control, it means you did not
+              hear distracting artifacts.
+            </p>
+            <div className="quality-dimensions">
+              {qualityDimensions.map(({ key, label }) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={qualityDraft[key]}
+                    onChange={(event) =>
+                      setQualityDraft((current) => ({
+                        ...current,
+                        [key]: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <b>{qualityDraft[key]} / 5</b>
+                </label>
+              ))}
+            </div>
+            <label className="quality-notes">
+              Listening notes
+              <textarea
+                value={qualityDraft.notes}
+                onChange={(event) =>
+                  setQualityDraft((current) => ({
+                    ...current,
+                    notes: event.target.value.slice(0, 1200),
+                  }))
+                }
+                placeholder="For example: clear vocal, small warble at 0:12, excellent overall."
+              />
+            </label>
+            <div className="quality-review-actions">
+              <span>{qualityScore(qualityDraft)} / 100</span>
+              <button onClick={() => setQualityCandidate(null)}>Cancel</button>
+              <button onClick={saveQualityReview}>Save private review</button>
+            </div>
           </section>
         </div>
       )}
@@ -3602,6 +3857,87 @@ function MultitrackWorkspace({
     (track: TrackAsset) => soloed[track.id] ?? Boolean(track.metadata?.soloed),
     [soloed],
   );
+  function downloadWorkspaceFile(url: string, filename: string) {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+  function downloadDeliveryManifest() {
+    if (!version) return;
+    const manifest = {
+        product: "Dozi Music Studio",
+        exportedAt: new Date().toISOString(),
+        song: {
+          title: data.song.title,
+          description: data.song.description,
+          lyrics: data.song.lyrics,
+          instrumental: data.song.isInstrumental,
+        },
+        version: {
+          number: version.version,
+          durationSeconds: version.duration,
+          bpm: version.bpm,
+          key: `${version.musicalKey} ${version.scale}`,
+          provider: version.provider,
+          providerModel: version.providerModel || null,
+          seed: version.seed,
+          createdAt: version.createdAt,
+          master: version.audioUrl
+            ? {
+                filename: `${data.song.title}-v${version.version}-master.${audioExtension(version.mimeType, version.codec)}`,
+                format: audioExtension(version.mimeType, version.codec).toUpperCase(),
+                privateUrl: version.audioUrl,
+              }
+            : null,
+        },
+        sourceTracks: tracks.map((track) => ({
+          name: track.instrument || track.role.toLowerCase().replaceAll("_", " "),
+          role: track.role,
+          provenance: sourceLabel(track.sourceType),
+          derived: ["DERIVED", "SEPARATED"].includes(track.sourceType),
+          format: audioExtension(track.mimeType, track.codec).toUpperCase(),
+          timelineStartSeconds: track.timelineStartSeconds,
+          durationSeconds: track.durationSeconds,
+          privateUrl: track.audioUrl,
+        })),
+        notes: [
+          "The master is the saved version master.",
+          "Source tracks are individual assets. Derived or separated tracks can contain leakage or artifacts and are not pristine studio stems.",
+          "Mixer moves are not included until a new mix version is rendered.",
+        ],
+      },
+      blob = new Blob([JSON.stringify(manifest, null, 2)], {
+        type: "application/json",
+      }),
+      url = URL.createObjectURL(blob);
+    downloadWorkspaceFile(
+      url,
+      `${data.song.title}-v${version.version}-delivery-manifest.json`,
+    );
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setMixNotice("Delivery manifest downloaded with this version’s private source details.");
+  }
+  function downloadSourceTracks() {
+    if (!version || !tracks.length) return;
+    tracks.forEach((track, index) => {
+      const name = track.instrument || track.role.toLowerCase().replaceAll("_", " ");
+      window.setTimeout(
+        () =>
+          downloadWorkspaceFile(
+            track.audioUrl,
+            `${data.song.title}-v${version.version}-${name}.${audioExtension(track.mimeType, track.codec)}`,
+          ),
+        index * 250,
+      );
+    });
+    setMixNotice(
+      `Starting ${tracks.length} source-track downloads. Your browser may ask you to allow multiple downloads.`,
+    );
+  }
   function chooseVocalComparison(choice: "generated" | "source") {
     if (!generatedLeadVocal || !sourceVocalStem) return;
     setMuted((values) => ({
@@ -4362,6 +4698,30 @@ function MultitrackWorkspace({
         <span>{formatTime(version.duration)}</span>
         <small className="mixer-shortcut"><kbd>Space</kbd> Play / pause · <kbd>Return</kbd> Go to start</small>
       </div>
+      <aside className="export-guide" aria-label="Export information">
+        <div>
+          <small>PRIVATE DELIVERY</small>
+          <strong>Version {version.version} · {formatTime(version.duration)} · {audioExtension(version.mimeType, version.codec).toUpperCase()}</strong>
+          <span>Master downloads are the saved version master. Stem downloads are individual source assets, not a new mix; render a new mix version to export your current mixer moves.</span>
+        </div>
+        <div className="export-actions">
+          {version.audioUrl && (
+            <a
+              href={version.audioUrl}
+              download={`${data.song.title}-v${version.version}-master.${audioExtension(version.mimeType, version.codec)}`}
+            >
+              Download saved master
+            </a>
+          )}
+          {tracks.length > 1 && (
+            <button onClick={downloadSourceTracks}>
+              Download {tracks.length} source tracks
+            </button>
+          )}
+          <button onClick={downloadDeliveryManifest}>Download delivery manifest</button>
+          <small>{version.provider}{version.providerModel ? ` · ${version.providerModel}` : ""} · created {new Date(version.createdAt).toLocaleDateString()}</small>
+        </div>
+      </aside>
       {hasStems && version.audioUrl && (
         <div className="audition-mode" role="group" aria-label="Audition source">
           <span>HEARING</span>
@@ -4515,8 +4875,9 @@ function MultitrackWorkspace({
               <div className="track-name">
                 <strong>{name}</strong>
                 <small>{track.role.toLowerCase().replaceAll("_", " ")}</small>
-                <a href={track.audioUrl} download={`${data.song.title}-${name}.wav`}>
-                  Export stem
+                <small className="asset-provenance">{sourceLabel(track.sourceType)} · {audioExtension(track.mimeType, track.codec).toUpperCase()}</small>
+                <a href={track.audioUrl} download={`${data.song.title}-v${version.version}-${name}.${audioExtension(track.mimeType, track.codec)}`}>
+                  Export stem · source asset
                 </a>
                 {hasStems && ["NATIVE_TRACK", "DERIVED_STEM"].includes(track.role) && (
                   <button
@@ -4609,8 +4970,8 @@ function MultitrackWorkspace({
             {mixBusy === "rendering" ? "Rendering…" : "Render new mix version"}
           </button>
           {version.audioUrl && (
-            <a href={version.audioUrl} download={`${data.song.title}-v${version.version}.wav`}>
-              Download current mix
+            <a href={version.audioUrl} download={`${data.song.title}-v${version.version}-master.${audioExtension(version.mimeType, version.codec)}`}>
+              Download current mix (saved master)
             </a>
           )}
         </div>
@@ -4682,7 +5043,7 @@ function MultitrackWorkspace({
         </div>
       )}
       <p className="mixer-footnote">
-        Mixer moves are non-destructive. Saving or rendering a new version leaves the source assets unchanged.
+        Mixer moves are non-destructive. Saving or rendering a new version leaves the source assets unchanged; archive removes this song only from the active Library and does not delete its private history.
       </p>
     </div>
   );
@@ -4757,6 +5118,9 @@ function SongCard({
                 ? s.errorMessage
                 : labels[s.status]}
             </span>
+            {s.status === "FAILED" && (
+              <small>Your song idea is unchanged. Update the brief above and generate a new version when ready.</small>
+            )}
           </div>
         )}
         <div className="song-foot">
