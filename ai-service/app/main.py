@@ -5,6 +5,7 @@ from fastapi import FastAPI, Header, HTTPException, Request as HttpRequest
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from .ace_step import AceStepClient, AceStepError, AceStepRequestTranslator, AceStepSettings
+from .artist_vocal import render_artist_vocal, resolve_rvc_artifact
 from .minimax import MiniMaxClient, MiniMaxError, MiniMaxRequestTranslator, MiniMaxSettings
 from .phrase_repair import render_phrase_repair
 from .vocal_analysis import analyze_vocal, verify_identity_phrase
@@ -30,10 +31,13 @@ class VocalAnalysisRequest(BaseModel):audioBase64:str;mimeType:str;minimumUsable
 class IdentityVerificationRequest(VocalAnalysisRequest):expectedPhrase:str
 class PhraseRepairRequest(BaseModel):
     sourceAudioBase64:str;replacementAudioBase64:str;startSeconds:float=Field(ge=0);endSeconds:float=Field(gt=0);crossfadeMs:int=Field(default=80,ge=0,le=500)
+class ArtistVocalRequest(BaseModel):
+    jobId:str;profileId:str;profileVersionId:str;modelRef:str;indexRef:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str
 
 SEPARATOR_STEMS=("vocals","drums","bass","guitar","piano","other")
 separation_jobs:dict[str,dict[str,Any]]={}
 separation_tasks:set[asyncio.Task[Any]]=set()
+separation_asset_tokens:dict[str,list[str]]={}
 
 def separator_config():
     projects=Path(os.getenv("DOZI_PROJECTS_DIR","/Users/F.D/Projects"))
@@ -47,6 +51,14 @@ def separator_config():
 def separator_available():
     cfg=separator_config()
     return cfg["binary"].is_file() and cfg["models"].is_dir()
+
+def rvc_config():
+    root=Path(os.getenv("DOZI_RVC_ROOT","/Users/F.D/Projects/RVC-Dozi")).expanduser().resolve()
+    return {"root":root,"python":Path(os.getenv("DOZI_RVC_PYTHON",str(root/".venv/bin/python"))),"cli":Path(os.getenv("DOZI_RVC_CLI",str(root/"infer/cli.py")))}
+
+def vocal_identity_available():
+    cfg=rvc_config()
+    return separator_available() and cfg["python"].is_file() and cfg["cli"].is_file()
 
 def separated_wav_metadata(path:Path):
     import av
@@ -64,23 +76,55 @@ def separated_wav_metadata(path:Path):
     if not arrays:raise ValueError("SEPARATION_EMPTY_STEM")
     samples=np.concatenate(arrays,axis=1)
     if samples.shape[0]!=channels and channels>1:samples=samples.reshape(channels,-1,order="F")
+    samples=np.nan_to_num(samples,nan=0.0,posinf=1.0,neginf=-1.0)
     mono=np.max(np.abs(samples),axis=0)
     waveform=[round(float(part.max()),4) if part.size else 0.0 for part in np.array_split(mono,96)]
-    data=path.read_bytes()
+    pcm=(np.clip(samples,-1.0,1.0)*32767).round().astype("<i2").T.tobytes()
+    output=io.BytesIO()
+    with wave.open(output,"wb") as wav:
+        wav.setnchannels(channels);wav.setsampwidth(2);wav.setframerate(sample_rate);wav.writeframes(pcm)
+    data=output.getvalue()
     return data,{
-        "mimeType":"audio/wav","codec":"pcm_f32le","sampleRate":sample_rate,
-        "bitDepth":32,"channels":channels,"durationSeconds":round(samples.shape[1]/sample_rate,6),
+        "mimeType":"audio/wav","codec":"pcm_s16le","sampleRate":sample_rate,
+        "bitDepth":16,"channels":channels,"durationSeconds":round(samples.shape[1]/sample_rate,6),
         "checksum":hashlib.sha256(data).hexdigest(),"waveformData":waveform,
     }
 
+def prepare_separation_wav(audio:bytes,path:Path):
+    """Write separator input as PCM WAV, decoding hosted MP3/other audio when needed."""
+    if audio[:4]==b"RIFF" and audio[8:12]==b"WAVE":
+        path.write_bytes(audio)
+        return
+    import av
+    try:
+        with av.open(io.BytesIO(audio)) as source:
+            input_stream=next((stream for stream in source.streams if stream.type=="audio"),None)
+            if input_stream is None:raise ValueError("audio stream missing")
+            sample_rate=int(input_stream.rate or 48000)
+            layout=input_stream.codec_context.layout.name if input_stream.codec_context.layout else "stereo"
+            with av.open(str(path),"w",format="wav") as destination:
+                output_stream=destination.add_stream("pcm_s16le",rate=sample_rate)
+                output_stream.layout=layout
+                resampler=av.audio.resampler.AudioResampler(format="s16",layout=layout,rate=sample_rate)
+                for frame in source.decode(input_stream):
+                    for converted in resampler.resample(frame):
+                        for packet in output_stream.encode(converted):destination.mux(packet)
+                for converted in resampler.resample(None):
+                    for packet in output_stream.encode(converted):destination.mux(packet)
+                for packet in output_stream.encode(None):destination.mux(packet)
+    except (av.error.FFmpegError,EOFError,ValueError) as exc:
+        raise RuntimeError("SEPARATION_AUDIO_DECODE_FAILED") from exc
+    if not path.is_file() or path.stat().st_size<=44:raise RuntimeError("SEPARATION_AUDIO_DECODE_FAILED")
+
 def run_separation(job_id:str,audio:bytes,mime_type:str):
-    state=separation_jobs[job_id]
+    state=separation_jobs[job_id];tokens=[]
     try:
         cfg=separator_config();state.update(status="PROCESSING",progress=18,message="Loading the separation model")
-        suffix=".wav" if "wav" in mime_type else ".mp3" if "mpeg" in mime_type else ".audio"
         with tempfile.TemporaryDirectory(prefix="dozi-separation-") as root:
             source_dir=Path(root)/"source";output_dir=Path(root)/"output"
-            source_dir.mkdir();output_dir.mkdir();source_path=source_dir/f"master{suffix}";source_path.write_bytes(audio)
+            source_dir.mkdir();output_dir.mkdir();source_path=source_dir/"master.wav"
+            state.update(progress=22,message="Preparing audio for separation")
+            prepare_separation_wav(audio,source_path)
             state.update(progress=28,message="Separating vocals and instruments")
             command=[
                 str(cfg["binary"]),"--model",str(cfg["model"]),"--models_dir",str(cfg["models"]),
@@ -100,6 +144,7 @@ def run_separation(job_id:str,audio:bytes,mime_type:str):
                 if not matches:continue
                 data,metadata=separated_wav_metadata(matches[0]);token=hashlib.sha256(f"{job_id}:{stem}:{metadata['checksum']}".encode()).hexdigest()
                 ace_assets[token]=(data,"audio/wav")
+                tokens.append(token)
                 assets.append({
                     "assetKey":f"separated-{stem}","role":"DERIVED_STEM","instrument":stem.title(),
                     "instrumentGroup":"VOCALS" if stem=="vocals" else "DRUMS" if stem=="drums" else "MUSIC",
@@ -108,8 +153,10 @@ def run_separation(job_id:str,audio:bytes,mime_type:str):
                     "metadata":metadata,"providerMetadata":{"generationMethod":"SEPARATION","separator":cfg["model"],"editingAid":True},
                 })
             if len(assets)<4:raise RuntimeError("SEPARATION_INCOMPLETE_RESULT")
+            separation_asset_tokens[job_id]=tokens
             state.update(status="COMPLETE",progress=100,message="Separated tracks are ready",assets=assets)
     except Exception as exc:
+        for token in separation_asset_tokens.pop(job_id,tokens):ace_assets.pop(token,None)
         logger.exception("Stem separation failed")
         state.update(status="FAILED",progress=0,message="Stem separation could not finish",errorCode=str(exc))
 
@@ -143,6 +190,33 @@ def phrase_repair_render(request:PhraseRepairRequest,authorization:str|None=Head
         source=base64.b64decode(request.sourceAudioBase64,validate=True);replacement=base64.b64decode(request.replacementAudioBase64,validate=True)
         return render_phrase_repair(source,replacement,start_seconds=request.startSeconds,end_seconds=request.endSeconds,crossfade_ms=request.crossfadeMs)
     except (ValueError,base64.binascii.Error) as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+@app.post("/v1/artist-vocal-conversion",response_model=Result)
+async def artist_vocal_conversion(request:ArtistVocalRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    if not vocal_identity_available():raise HTTPException(503,detail={"code":"VOCAL_IDENTITY_PROCESSOR_UNAVAILABLE","retryable":True})
+    try:
+        source=base64.b64decode(request.sourceAudioBase64,validate=True)
+    except (ValueError,base64.binascii.Error):
+        raise HTTPException(422,detail={"code":"VOCAL_IDENTITY_SOURCE_EMPTY","retryable":False}) from None
+    if len(source)<512 or len(source)>120*1024*1024:raise HTTPException(422,detail={"code":"VOCAL_IDENTITY_SOURCE_EMPTY","retryable":False})
+    rvc=rvc_config();separator=separator_config();started=time.monotonic()
+    try:
+        model=resolve_rvc_artifact(request.modelRef,rvc["root"],".pth")
+        index=resolve_rvc_artifact(request.indexRef,rvc["root"],".index")
+        rendered=await asyncio.to_thread(render_artist_vocal,source,model_path=model,index_path=index,rvc_root=rvc["root"],separator_binary=separator["binary"],separator_models=separator["models"],separator_model=separator["model"],separator_device=separator["device"])
+    except ValueError as exc:
+        raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+    except subprocess.TimeoutExpired:
+        raise HTTPException(503,detail={"code":"VOCAL_IDENTITY_CONVERSION_FAILED","retryable":True}) from None
+    except RuntimeError as exc:
+        retryable=str(exc) in {"VOCAL_IDENTITY_PROCESSOR_UNAVAILABLE","VOCAL_IDENTITY_SEPARATION_FAILED","VOCAL_IDENTITY_CONVERSION_FAILED"}
+        raise HTTPException(503 if retryable else 422,detail={"code":str(exc),"retryable":retryable}) from None
+    elapsed=round(time.monotonic()-started,3);processing={**rendered["processing"],"elapsedSeconds":elapsed,"profileVersionId":request.profileVersionId}
+    master=rendered["master"];vocal=rendered["vocal"]
+    return Result(assets=[
+        Asset(assetKey="artist-voice-master",role="MASTER",provenance="RENDERED",isPrimary=True,sortOrder=0,audio=Audio(base64=base64.b64encode(master["bytes"]).decode()),metadata=Metadata(**master["metadata"]),providerMetadata={"generationMethod":"VOCAL_IDENTITY_CONVERSION",**processing}),
+        Asset(assetKey="artist-voice-lead-vocal",role="NATIVE_TRACK",instrument="Lead Vocal",instrumentGroup="VOCALS",provenance="RENDERED",isPrimary=False,sortOrder=1,audio=Audio(base64=base64.b64encode(vocal["bytes"]).decode()),metadata=Metadata(**vocal["metadata"]),providerMetadata={"generationMethod":"VOCAL_IDENTITY_CONVERSION",**processing}),
+    ],providerMetadata={"processor":"rvc-v2","profileId":request.profileId,"profileVersionId":request.profileVersionId,"elapsedSeconds":elapsed,"separator":separator["model"]})
 @app.post("/v1/stem-separation")
 async def stem_separation(request:HttpRequest,authorization:str|None=Header(default=None),x_audio_mime_type:str=Header(default="audio/wav")):
     authorize(authorization)
@@ -157,12 +231,19 @@ def stem_separation_status(job_id:str,authorization:str|None=Header(default=None
     authorize(authorization);state=separation_jobs.get(job_id)
     if not state:raise HTTPException(404,detail={"code":"SEPARATION_JOB_NOT_FOUND","retryable":False})
     return state
+@app.delete("/v1/stem-separation/{job_id}")
+def stem_separation_cleanup(job_id:str,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    tokens=separation_asset_tokens.pop(job_id,[])
+    for token in tokens:ace_assets.pop(token,None)
+    separation_jobs.pop(job_id,None)
+    return {"releasedAssets":len(tokens)}
 def wav_bytes(seed:int,duration:int,bpm:int):
     rate=16000;out=io.BytesIO()
     with wave.open(out,"wb") as wav:wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(rate);wav.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*(110+(seed%12)*7)*i/rate))) for i in range(rate*duration)))
     return out.getvalue(),[0.1526]*96
 @app.get("/health")
-async def health():return{"status":"ready","gatewayAvailable":True,"stemSeparation":{"available":separator_available(),"engine":"bs-roformer"},"aceStep":await AceStepClient(settings()).health(),"minimax":await MiniMaxClient(minimax_settings()).health()}
+async def health():return{"status":"ready","gatewayAvailable":True,"stemSeparation":{"available":separator_available(),"engine":"bs-roformer"},"vocalIdentity":{"available":vocal_identity_available(),"engine":"rvc-v2"},"aceStep":await AceStepClient(settings()).health(),"minimax":await MiniMaxClient(minimax_settings()).health()}
 @app.get("/capabilities")
 async def capabilities(authorization:str|None=Header(default=None)):
     authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"supported-not-integrated","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"DEVELOPMENT" if separator_available() else "UNAVAILABLE","aceStep":state}

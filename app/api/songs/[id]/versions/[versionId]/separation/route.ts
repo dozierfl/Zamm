@@ -171,7 +171,7 @@ export async function GET(
       id: string;
       mappingId: string;
       storageKey: string;
-      bytes: Uint8Array;
+      byteLength: number;
     }>;
     for (const asset of state.assets) {
       if (
@@ -199,7 +199,7 @@ export async function GET(
         customMetadata: { ownerId: user.id, songId: id, versionId, sourceAssetId: source.sourceAssetId, role: "DERIVED_STEM" },
       });
       uploaded.push(storageKey);
-      prepared.push({ asset, id: assetId, mappingId, storageKey, bytes });
+      prepared.push({ asset, id: assetId, mappingId, storageKey, byteLength: bytes.byteLength });
     }
     try {
       await sql.begin(async (tx) => {
@@ -212,7 +212,7 @@ export async function GET(
             ) values(
               ${item.id},${user.id},${item.storageKey},${metadata.mimeType},${metadata.codec},
               ${metadata.sampleRate},${metadata.bitDepth},${metadata.channels},
-              ${metadata.durationSeconds},${item.bytes.byteLength},${metadata.checksum},
+              ${metadata.durationSeconds},${item.byteLength},${metadata.checksum},
               ${tx.json(metadata.waveformData)},${tx.json({
                 ...item.asset.providerMetadata,
                 separationJobId: jobId,
@@ -238,6 +238,10 @@ export async function GET(
       await Promise.all(uploaded.map((key) => bindings.AUDIO.delete(key)));
       throw error;
     }
+    await fetch(
+      `${config.aiServiceBaseUrl}/v1/stem-separation/${encodeURIComponent(jobId)}`,
+      { method: "DELETE", headers: serviceHeaders(config.aiServiceToken) },
+    ).catch(() => undefined);
     return Response.json({
       job: { ...state, assets: undefined, persisted: true, message: `${prepared.length} separated tracks are ready.` },
     });

@@ -15,6 +15,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "account:reset-password": "tsx scripts/reset-password.ts",
+    "vocal:prepare-training": "tsx scripts/prepare-vocal-training.ts",
+    "vocal:train-v1": "./scripts/train-vocal-profile-v1.command",
+    "vocal:activate-version": "tsx scripts/activate-vocal-profile-version.ts",
     "test:ai": "cd ai-service && .venv/bin/python -m pytest"
   },
   "dependencies": {

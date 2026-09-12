@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { compose, contextualTrackGenerationSchema } from "../lib/domain.ts";
+import { compose, contextualTrackGenerationSchema, createGenerationSchema } from "../lib/domain.ts";
 import {
   AceStepMusicProvider,
   ElevenLabsMusicProvider,
@@ -31,6 +31,7 @@ test("Worker routes pass the PostgreSQL binding through authentication", async (
     "songs/[id]",
     "songs/[id]/versions/[versionId]/separation",
     "songs/[id]/versions/[versionId]/mix",
+    "songs/[id]/versions/[versionId]/tracks/[trackId]/replace",
     "vocal-profiles",
     "vocal-profiles/[id]/challenge",
     "vocal-profiles/[id]/challenge/[verificationId]/recording",
@@ -103,6 +104,65 @@ test("mock provider supports one aligned master and six aligned assets", async (
     single.assets.map((a) => a.role),
     ["MASTER"],
   );
+});
+test("advanced tempo and tonality overrides reach the composition plan", async () => {
+  const plan = compose({
+    prompt: "polished full-band neo-soul song",
+    lyrics: "Test lyric",
+    instrumental: false,
+    durationSeconds: 30,
+    outputMode: "MASTER_ONLY",
+    bpm: 82,
+    key: "E",
+    scale: "minor",
+  });
+  assert.equal(plan.bpm, 82);
+  assert.equal(plan.key, "E");
+  assert.equal(plan.scale, "minor");
+  assert.match(plan.generationCaption, /82 BPM, E minor/);
+  const studio = await readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8");
+  assert.match(studio, /bpm: songBpm/);
+  assert.match(studio, /key: songKey/);
+  assert.match(studio, /scale: songScale/);
+  assert.doesNotMatch(studio, /key: "F#"/);
+});
+test("song creation can select an owner-scoped immutable vocalist version", async () => {
+  const route = await readFile(
+      new URL("../app/api/generations/route.ts", import.meta.url),
+      "utf8",
+    ),
+    orchestrator = await readFile(
+      new URL("../lib/generation-orchestrator.ts", import.meta.url),
+      "utf8",
+    ),
+    studio = await readFile(
+      new URL("../app/studio-app.tsx", import.meta.url),
+      "utf8",
+    );
+  const parsed = createGenerationSchema.parse({
+    prompt: "original private vocalist test song",
+    vocalProfileId: "b6e76b9c-ccfb-4a39-b88e-0965d008d98b",
+  });
+  assert.equal(parsed.vocalProfileId, "b6e76b9c-ccfb-4a39-b88e-0965d008d98b");
+  assert.match(route, /p\.owner_id=\$\{user\.id\}/);
+  assert.match(route, /v\.is_active=true/);
+  assert.match(route, /vocal_profile_id,vocal_profile_version_id/);
+  assert.match(orchestrator, /where v\.id=\$\{job\.vocalProfileVersionId\}/);
+  assert.match(orchestrator, /role:"PREMASTER"/);
+  assert.match(studio, /Provider vocalist/);
+  assert.match(studio, /My Voice V\{profile\.activeVersionNumber\}/);
+  assert.match(studio, /vocalProfileId: instrumental/);
+});
+test("private vocalist processing is local, reversible, and editable", async () => {
+  const [processor, service] = await Promise.all([
+    readFile(new URL("../lib/vocal-identity-processor.ts", import.meta.url), "utf8"),
+    readFile(new URL("../ai-service/app/main.py", import.meta.url), "utf8"),
+  ]);
+  assert.match(processor, /\/v1\/artist-vocal-conversion/);
+  assert.match(service, /role="MASTER"/);
+  assert.match(service, /role="NATIVE_TRACK"/);
+  assert.match(service, /instrumentGroup="VOCALS"/);
+  assert.match(service, /resolve_rvc_artifact/);
 });
 test("PostgreSQL schema encodes idempotency and normalized assets", async () => {
   const migration = await readFile(
@@ -270,6 +330,66 @@ test("guided singing is stored separately and cannot count as usable before anal
   assert.match(studio, /startRecording\("singing", p\.id\)/);
   assert.match(studio, /maximumSeconds = kind === "identity" \? 15 : 60/);
 });
+test("owned vocal imports can be deleted as one private pre-training group", async () => {
+  const [route, profilesRoute, studio] = await Promise.all([
+    readFile(
+      new URL(
+        "../app/api/vocal-profiles/[id]/sources/[sourceId]/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../app/api/vocal-profiles/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(route, /requireUser/);
+  assert.match(route, /p\.owner_id=\$\{user\.id\}/);
+  assert.match(route, /OWNED_VOCAL_BOUNCE/);
+  assert.match(route, /vocal_profile_versions/);
+  assert.match(route, /delete from vocal_profile_sources/);
+  assert.match(route, /delete from audio_assets/);
+  assert.match(route, /bindings\.AUDIO\.delete/);
+  assert.match(route, /usable_singing_seconds/);
+  assert.match(profilesRoute, /usable_duration_seconds as "usableDurationSeconds"/);
+  assert.match(studio, /Delete import/);
+  assert.match(studio, /window\.confirm/);
+  assert.match(studio, /usable seconds removed/);
+});
+test("local vocal training snapshots include only approved verified singing", async () => {
+  const script = await readFile(
+    new URL("../scripts/prepare-vocal-training.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(script, /profile\.verifiedAt/);
+  assert.match(script, /profile\.usableSeconds\) < 600/);
+  assert.match(script, /s\.included_in_training=true/);
+  assert.match(script, /s\.source_type='OWNED_VOCAL_BOUNCE'/);
+  assert.match(script, /Reserve compressed live takes for evaluation/);
+  assert.match(script, /s\.rights_attested=true/);
+  assert.match(script, /copiedChecksum !== source\.checksum/);
+  assert.match(script, /sourceManifestChecksum/);
+  assert.match(script, /training-manifest\.json/);
+});
+test("the local RVC Version 1 launcher is resumable and provenance-bound", async () => {
+  const [launcher, preparation] = await Promise.all([
+    readFile(
+      new URL("../scripts/train-vocal-profile-v1.command", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../scripts/prepare-rvc-experiment.py", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(launcher, /set -euo pipefail/);
+  assert.match(launcher, /\.dozi-preprocess-complete/);
+  assert.match(launcher, /train\.dataset\.extract_f0 cpu .* rmvpe/);
+  assert.match(launcher, /train\.dataset\.extract_hubert_feature cpu/);
+  assert.match(launcher, /-te 25/);
+  assert.match(launcher, /train\.train_index/);
+  assert.match(preparation, /source_manifest_checksum/);
+  assert.match(preparation, /dozi-training-provenance\.json/);
+});
 test("vocal capture routes one hardware channel to both sides and requires local review", async () => {
   const studio = await readFile(
     new URL("../app/studio-app.tsx", import.meta.url),
@@ -412,8 +532,133 @@ test("multitrack workspace synchronizes assets without doubling the master", asy
   assert.match(studio, /Rendered master/);
   assert.match(studio, /Live tracks/);
   assert.match(studio, /Playing the saved Version master/);
-  assert.match(studio, /nextMode \|\| \(nextVersion\?\.provider === "dozi-mixer"/);
+  assert.match(studio, /aria-keyshortcuts="Space Enter"/);
+  assert.match(studio, /Return.*Go to start/);
+  assert.match(studio, /Mute and solo are available in Live tracks/);
+  assert.match(studio, /Level is available in Live tracks/);
+  assert.match(studio, /Pan is available in Live tracks/);
+  assert.match(studio, /window\.addEventListener\("keydown", onKeyDown, true\)/);
+  assert.match(studio, /window\.addEventListener\("keyup", onKeyUp, true\)/);
+  assert.match(studio, /event\.stopPropagation\(\)/);
+  assert.match(studio, /nextVersion\.audioUrl \? "master" : "tracks"/);
+  assert.match(studio, /await Promise\.all\([\s\S]*positionMediaElement/);
+  assert.match(studio, /Math\.abs\(element\.currentTime - sourceTime\) > 0\.05/);
   assert.match(studio, /source assets unchanged/);
+});
+test("active generation progress remains visible while Dozi is working", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /activeGenerationJobs/);
+  assert.match(studio, /Dozi is working/);
+  assert.match(studio, /This status refreshes automatically/);
+  assert.match(studio, /Check now/);
+  assert.match(studio, /labels\[song\.status\][\s\S]*song\.progress/);
+});
+test("song cards expose only available library actions", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /aria-label=\{`Download \$\{extension\.toUpperCase\(\)\}`\}/);
+  assert.doesNotMatch(studio, /aria-label="Favorite"/);
+  assert.doesNotMatch(studio, /aria-label="More"/);
+});
+test("clicking a song-card waveform seeks and starts the selected song", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /function playFromSongWaveform/);
+  assert.match(studio, /onSeek=\{\(p\) => playFromSongWaveform\(s, p\)\}/);
+  assert.match(studio, /ariaLabel=\{`Play \$\{s\.title\} from this point`\}/);
+  assert.match(studio, /onLoadedMetadata/);
+  assert.match(studio, /pendingSongStart/);
+});
+test("song-card Play begins audio from the user click", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /function play\(song: Song\)/);
+  assert.match(studio, /element\.src = song\.audioUrl/);
+  assert.match(studio, /void element\.play\(\)\.catch/);
+  assert.match(studio, /aria-label=\{[\s\S]*`Play \$\{s\.title\}`/);
+});
+test("Return moves the active Create or Library song back to the start", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /const returnToSongStart/);
+  assert.match(studio, /view === "tracks"/);
+  assert.match(studio, /event\.code !== "Enter"/);
+  assert.match(studio, /audio\.current\.currentTime = 0/);
+  assert.match(studio, /window\.addEventListener\("keydown", returnToSongStart, true\)/);
+});
+test("the library sort control reorders the visible song list", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /librarySort/);
+  assert.match(studio, /new Date\(right\.createdAt\)[\s\S]*new Date\(left\.createdAt\)/);
+  assert.match(studio, /value="newest">Newest first/);
+  assert.match(studio, /value="oldest">Oldest first/);
+  assert.match(studio, /setLibrarySort/);
+});
+test("the library scales browsing with grid, list, and bounded results", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /libraryView/);
+  assert.match(studio, /aria-label="Library layout"/);
+  assert.match(studio, /aria-pressed=\{libraryView === "grid"\}/);
+  assert.match(studio, /aria-pressed=\{libraryView === "list"\}/);
+  assert.match(studio, /libraryVisibleCount/);
+  assert.match(studio, /filtered\.slice\(0, libraryVisibleCount\)/);
+  assert.match(studio, /Show 24 more/);
+});
+test("the library filters generated, imported, and private-voice songs", async () => {
+  const studio = await readFile(
+    new URL("../app/studio-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(studio, /aria-label="Filter library"/);
+  assert.match(studio, /value="generated">Generated/);
+  assert.match(studio, /value="imported">Imported/);
+  assert.match(studio, /value="my-voice">My Voice/);
+  assert.match(studio, /song\.provider === "user-upload"/);
+  assert.match(studio, /Boolean\(song\.vocalist\)/);
+});
+test("library archiving is confirmed, owner-scoped, and non-destructive", async () => {
+  const [studio, listRoute, songRoute] = await Promise.all([
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/generations/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/songs/[id]/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(studio, /Archive song/);
+  assert.match(studio, /Its private audio[\s\S]*not deleted/);
+  assert.match(studio, /method: "DELETE"/);
+  assert.match(listRoute, /s\.archived_at is null/);
+  assert.match(songRoute, /update songs set archived_at=now\(\)/);
+  assert.match(songRoute, /user_id=\$\{user\.id\}/);
+});
+test("generation failures explain a useful recovery action", async () => {
+  const [listRoute, detailRoute, auth] = await Promise.all([
+    readFile(new URL("../app/api/generations/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/generations/[id]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/auth.ts", import.meta.url), "utf8"),
+  ]);
+  for (const source of [listRoute, detailRoute, auth]) {
+    assert.match(source, /GENERATION_PROVIDER_UNAVAILABLE/);
+    assert.match(source, /PROVIDER_AUTHORIZATION_FAILED/);
+    assert.match(source, /PROVIDER_RATE_LIMITED/);
+    assert.match(source, /GENERATION_TIMEOUT/);
+  }
+  assert.match(auth, /The music-service key was not accepted/);
 });
 test("derived-stem separation is asynchronous, private, and source-linked", async () => {
   const [gateway, route, studio] = await Promise.all([
@@ -429,16 +674,38 @@ test("derived-stem separation is asynchronous, private, and source-linked", asyn
   ]);
   assert.match(gateway, /asyncio\.create_task/);
   assert.match(gateway, /bs-roformer-infer/);
+  assert.match(gateway, /pcm_s16le/);
+  assert.match(gateway, /stem_separation_cleanup/);
   assert.match(gateway, /SEPARATOR_STEMS=.*vocals.*drums.*bass.*guitar.*piano.*other/);
   assert.match(route, /requireUser/);
   assert.match(route, /a\.owner_id=s\.user_id/);
   assert.match(route, /source_asset_id/);
+  assert.match(route, /method: "DELETE"/);
   assert.match(route, /'SEPARATION'/);
   assert.match(route, /'DERIVED_STEM'/);
   assert.match(route, /'SEPARATED'/);
   assert.match(studio, /Separate into tracks/);
   assert.match(studio, /separation\.message/);
   assert.match(studio, /does not describe these as pristine studio tracks/);
+});
+test("owned full-song imports create private immutable masters for separation", async () => {
+  const [route, studio] = await Promise.all([
+    readFile(new URL("../app/api/songs/import/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(route, /requireUser/);
+  assert.match(route, /SONG_IMPORT_RIGHTS_REQUIRED/);
+  assert.match(route, /inspectPcm16Wav/);
+  assert.match(route, /OWNED_FULL_MIX_IMPORT/);
+  assert.match(route, /'IMPORT_SONG'/);
+  assert.match(route, /'user-upload','owned-master-v1'/);
+  assert.match(route, /'UPLOAD','MASTER','UPLOADED'/);
+  assert.match(route, /bindings\.AUDIO\.put/);
+  assert.match(route, /bindings\.AUDIO\.delete/);
+  assert.match(studio, /Import full song/);
+  assert.match(studio, /encodeStereoPcm16Wav/);
+  assert.match(studio, /I own or control this song recording/);
+  assert.match(studio, /\/api\/songs\/import/);
 });
 test("mixer settings and rendered versions remain owner-scoped and non-destructive", async () => {
   const [route, studio] = await Promise.all([
@@ -465,6 +732,49 @@ test("mixer settings and rendered versions remain owner-scoped and non-destructi
   assert.match(studio, /leaves the source assets unchanged/);
   assert.match(studio, /Export stem/);
   assert.match(studio, /Download current mix/);
+  assert.match(studio, /aria-label="Vocal comparison"/);
+  assert.match(studio, /Generated Lead/);
+  assert.match(studio, /Source Vocal/);
+  assert.match(studio, /masterElements = useRef<Record<string, HTMLAudioElement \| null>>/);
+  assert.match(studio, /preload=\{preloadedMasterIds\.has\(item\.id\) \? "auto" : "metadata"\}/);
+  assert.match(studio, /await waitUntilPlayable\(nextMaster\)/);
+  assert.match(studio, /positionMediaElement\(nextMaster, bounded\)/);
+  assert.match(studio, /crossfadeMasters/);
+  assert.match(studio, /startMasterComparisonAt/);
+  assert.match(studio, /element\.volume = id === version\.id \? 1 : 0/);
+  assert.match(studio, /alreadyRunningInSync/);
+  assert.doesNotMatch(studio, /previous\.pause\(\)/);
+  assert.match(studio, /positionRef\.current = handoffPosition/);
+  assert.match(studio, /value=\{switchingVersionId \|\| version\.id\}/);
+});
+test("owned aligned tracks create explicit non-destructive draft versions", async () => {
+  const [route, studio] = await Promise.all([
+    readFile(
+      new URL(
+        "../app/api/songs/[id]/versions/[versionId]/tracks/[trackId]/replace/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(route, /requireUser/);
+  assert.match(route, /s\.user_id=\$\{user\.id\}/);
+  assert.match(route, /TRACK_REPLACEMENT_RIGHTS_REQUIRED/);
+  assert.match(route, /REPLACEMENT_DURATION_MISMATCH/);
+  assert.match(route, /operation_type[\s\S]*TRACK_REPLACE/);
+  assert.match(route, /parent_version_id/);
+  assert.match(route, /audio_asset_id,[\s\S]*null/);
+  assert.match(route, /draftRequiresRender: true/);
+  assert.match(route, /source_asset_id/);
+  assert.match(route, /replacement \? mapping\.audioAssetId/);
+  assert.match(route, /replacement \? "UPLOAD"/);
+  assert.match(route, /replacement \? "UPLOADED"/);
+  assert.match(studio, /Replace track/);
+  assert.match(studio, /I own or control this recording/);
+  assert.match(studio, /Editable track draft/);
+  assert.match(studio, /Create replacement draft/);
+  assert.match(studio, /selectVersion\(payload\.version\.id, "tracks"\)/);
 });
 test("ACE-Step selection stays behind the provider-neutral gateway", () => {
   const provider = createProvider("acestep", {

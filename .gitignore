@@ -45,6 +45,7 @@ yarn-error.log*
 /artifacts/bs-roformer-output/
 /artifacts/acestep-master-quality/
 /artifacts/vocal-identity-poc/
+/artifacts/vocal-training/
 ai-service/.venv/
 __pycache__/
 .pytest_cache/

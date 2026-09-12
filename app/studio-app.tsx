@@ -30,6 +30,7 @@ type Song = {
   musicalKey: string;
   genre: string;
   provider?: string;
+  vocalist?: string;
   status: Status;
   progress: number;
   waveform: number[];
@@ -113,6 +114,9 @@ type VocalProfile = {
   consentedAt: string | null;
   verifiedAt: string | null;
   latestPhraseMatchScore: number | null;
+  activeVersionId: string | null;
+  activeVersionNumber: number | null;
+  activeProviderModel: string | null;
   createdAt: string;
   sources: Array<{
     id: string;
@@ -123,6 +127,7 @@ type VocalProfile = {
       | "SEPARATED_OWNED_MIX";
     originalFilename: string | null;
     durationSeconds: number;
+    usableDurationSeconds: number;
     qualityScore: number | null;
     includedInTraining: boolean;
     analysisStatus: string;
@@ -153,6 +158,7 @@ function voiceSourceSummary(
   if (source.sourceType !== "OWNED_VOCAL_BOUNCE")
     return {
       durationSeconds: source.durationSeconds,
+      usableSeconds: source.usableDurationSeconds,
       analysisStatus: source.analysisStatus,
       qualityScore: source.qualityScore,
       partCount: 1,
@@ -169,6 +175,10 @@ function voiceSourceSummary(
   return {
     durationSeconds: parts.reduce(
       (total, item) => total + item.durationSeconds,
+      0,
+    ),
+    usableSeconds: parts.reduce(
+      (total, item) => total + item.usableDurationSeconds,
       0,
     ),
     analysisStatus: parts.some((item) => item.analysisStatus === "PENDING")
@@ -319,7 +329,7 @@ const labels: Record<Status, string> = {
   QUEUED: "Queued",
   PREPARING: "Preparing composition",
   GENERATING: "Generating audio",
-  POST_PROCESSING: "Analyzing mix",
+  POST_PROCESSING: "Finishing vocals and mix",
   UPLOADING: "Saving master",
   COMPLETE: "Ready",
   FAILED: "Generation failed",
@@ -337,16 +347,18 @@ function Wave({
   progress = 0,
   compact = false,
   onSeek,
+  ariaLabel = "Seek in song",
 }: {
   data: number[];
   progress?: number;
   compact?: boolean;
   onSeek?: (n: number) => void;
+  ariaLabel?: string;
 }) {
   return (
     <button
       className={`waveform ${compact ? "compact" : ""}`}
-      aria-label="Seek in song"
+      aria-label={ariaLabel}
       onClick={(e) => {
         const r = e.currentTarget.getBoundingClientRect();
         onSeek?.((e.clientX - r.left) / r.width);
@@ -476,10 +488,14 @@ export default function StudioApp() {
     ),
     [instrumental, setInstrumental] = useState(false),
     [lyrics, setLyrics] = useState(""),
+    [songBpm, setSongBpm] = useState(76),
+    [songKey, setSongKey] = useState("F#"),
+    [songScale, setSongScale] = useState<"major" | "minor">("minor"),
     [durationSeconds, setDurationSeconds] = useState(12),
     [providerPolicyAccepted, setProviderPolicyAccepted] = useState(false),
     [songs, setSongs] = useState<Song[]>([]),
     [profiles, setProfiles] = useState<VocalProfile[]>([]),
+    [selectedVocalProfileId, setSelectedVocalProfileId] = useState(""),
     [profileName, setProfileName] = useState("My Voice"),
     [profileBusy, setProfileBusy] = useState(false),
     [profileNotice, setProfileNotice] = useState(""),
@@ -513,15 +529,26 @@ export default function StudioApp() {
     [songWorkspace, setSongWorkspace] = useState<SongWorkspace | null>(null),
     [workspaceBusy, setWorkspaceBusy] = useState(false),
     [workspaceError, setWorkspaceError] = useState(""),
+    [libraryNotice, setLibraryNotice] = useState(""),
+    [archiveCandidate, setArchiveCandidate] = useState<Song | null>(null),
+    [archiveBusy, setArchiveBusy] = useState(false),
     [repairSong, setRepairSong] = useState<Song | null>(null),
     [repairImportOpen, setRepairImportOpen] = useState(false),
+    [songImportOpen, setSongImportOpen] = useState(false),
     [playing, setPlaying] = useState(false),
     [time, setTime] = useState(0),
     [search, setSearch] = useState(""),
+    [librarySort, setLibrarySort] = useState<"newest" | "oldest">("newest"),
+    [librarySource, setLibrarySource] = useState<
+      "all" | "generated" | "imported" | "my-voice"
+    >("all"),
+    [libraryView, setLibraryView] = useState<"grid" | "list">("grid"),
+    [libraryVisibleCount, setLibraryVisibleCount] = useState(24),
     [blueprint, setBlueprint] = useState(true),
     [submitting, setSubmitting] = useState(false),
     [notice, setNotice] = useState("");
   const audio = useRef<HTMLAudioElement | null>(null),
+    pendingSongStart = useRef<number | null>(null),
     recorder = useRef<MediaRecorder | null>(null),
     recordingChunks = useRef<Blob[]>([]),
     recordingElapsed = useRef(0),
@@ -536,13 +563,27 @@ export default function StudioApp() {
         genre: prompt.toLowerCase().includes("soul")
           ? "Neo-soul"
           : "Alternative pop",
-        bpm: prompt.toLowerCase().includes("slow") ? 68 : 76,
-        key: "F♯ minor",
+        bpm: songBpm,
+        key: `${songKey} ${songScale}`,
         mood: prompt.toLowerCase().includes("warm")
           ? "Warm · Reflective"
           : "Intimate · Hopeful",
       }),
-      [prompt],
+      [prompt, songBpm, songKey, songScale],
+    ),
+    activeVocalProfiles = useMemo(
+      () =>
+        profiles.filter(
+          (profile) => profile.status === "ACTIVE" && profile.activeVersionId,
+        ),
+      [profiles],
+    ),
+    activeGenerationJobs = useMemo(
+      () =>
+        songs.filter(
+          (song) => !["COMPLETE", "FAILED", "CANCELLED"].includes(song.status),
+        ),
+      [songs],
     );
   const loadSongs = useCallback(async () => {
     const res = await fetch("/api/generations", { cache: "no-store" });
@@ -576,10 +617,10 @@ export default function StudioApp() {
       .then(async (r) => (await r.json()) as { user: User | null })
       .then(async (d) => {
         setUser(d.user);
-        if (d.user) await loadSongs();
+        if (d.user) await Promise.all([loadSongs(), loadProfiles()]);
       })
       .catch(() => setUser(null));
-  }, [loadSongs]);
+  }, [loadProfiles, loadSongs]);
   useEffect(() => {
     fetch("/api/providers", { cache: "no-store" })
       .then(
@@ -638,6 +679,7 @@ export default function StudioApp() {
     const el = audio.current;
     if (!el) return;
     if (playing) {
+      if (pendingSongStart.current !== null) return;
       void el.play().catch(() => setPlaying(false));
     } else {
       el.pause();
@@ -650,13 +692,82 @@ export default function StudioApp() {
       .padStart(2, "0")}`;
   function play(song: Song) {
     if (!song.audioUrl) return;
-    if (active?.id === song.id) setPlaying((v) => !v);
-    else {
-      setActive(song);
-      setTime(0);
-      setPlaying(true);
+    pendingSongStart.current = null;
+    const element = audio.current;
+    if (active?.id === song.id) {
+      if (playing) {
+        element?.pause();
+        setPlaying(false);
+      } else {
+        setPlaying(true);
+        // Start within the button click itself so browsers treat this as a
+        // user-initiated playback request instead of an autoplay attempt.
+        void element?.play().catch(() => setPlaying(false));
+      }
+      return;
+    }
+
+    setActive(song);
+    setTime(0);
+    setPlaying(true);
+    if (element) {
+      // React will also update this source after state commits, but setting it
+      // here lets playback begin from the card's Play button gesture.
+      element.src = song.audioUrl;
+      element.currentTime = 0;
+      void element.play().catch(() => setPlaying(false));
     }
   }
+  function playFromSongWaveform(song: Song, fraction: number) {
+    if (!song.audioUrl) return;
+    const start = Math.max(0, Math.min(song.duration, fraction * song.duration));
+    if (active?.id === song.id) {
+      pendingSongStart.current = null;
+      if (audio.current) audio.current.currentTime = start;
+      setTime(start);
+      setPlaying(true);
+      void audio.current?.play().catch(() => setPlaying(false));
+      return;
+    }
+    pendingSongStart.current = start;
+    setActive(song);
+    setTime(start);
+    setPlaying(true);
+    if (audio.current) {
+      audio.current.src = song.audioUrl;
+      audio.current.currentTime = start;
+      void audio.current.play().catch(() => setPlaying(false));
+    }
+  }
+  useEffect(() => {
+    const returnToSongStart = (event: KeyboardEvent) => {
+      if (
+        view === "tracks" ||
+        event.code !== "Enter" ||
+        event.repeat ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        !active ||
+        document.querySelector('[role="dialog"][aria-modal="true"]')
+      )
+        return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      pendingSongStart.current = null;
+      if (audio.current) audio.current.currentTime = 0;
+      setTime(0);
+    };
+    window.addEventListener("keydown", returnToSongStart, true);
+    return () => window.removeEventListener("keydown", returnToSongStart, true);
+  }, [active, view]);
   async function openWorkspace(song: Song) {
     setPlaying(false);
     setWorkspaceError("");
@@ -687,6 +798,37 @@ export default function StudioApp() {
       setWorkspaceBusy(false);
     }
   }
+  async function archiveLibrarySong() {
+    if (!archiveCandidate?.songId || archiveBusy) return;
+    setArchiveBusy(true);
+    setLibraryNotice("");
+    try {
+      const response = await fetch(`/api/songs/${archiveCandidate.songId}`, {
+          method: "DELETE",
+        }),
+        payload = (await response.json()) as {
+          archived?: boolean;
+          error?: { message?: string };
+        };
+      if (!response.ok || !payload.archived)
+        throw new Error(payload.error?.message || "The song could not be archived.");
+      const songId = archiveCandidate.songId;
+      setSongs((items) => items.filter((song) => song.songId !== songId));
+      if (active?.songId === songId) {
+        setPlaying(false);
+        setActive(null);
+        setTime(0);
+      }
+      setLibraryNotice(`${archiveCandidate.title} was archived. Its private audio remains preserved.`);
+      setArchiveCandidate(null);
+    } catch (error) {
+      setLibraryNotice(
+        error instanceof Error ? error.message : "The song could not be archived.",
+      );
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
   async function generate() {
     if (
       !prompt.trim() ||
@@ -708,10 +850,12 @@ export default function StudioApp() {
             lyrics,
             instrumental,
             genre: plan.genre,
-            bpm: plan.bpm,
-            key: "F#",
+            bpm: songBpm,
+            key: songKey,
+            scale: songScale,
             durationSeconds,
             providerPolicyAccepted,
+            vocalProfileId: instrumental ? null : selectedVocalProfileId || null,
           }),
         }),
         data = (await res.json()) as {
@@ -1144,6 +1288,44 @@ export default function StudioApp() {
       );
     }
   }
+  async function deleteVocalImport(
+    profileId: string,
+    source: VocalProfile["sources"][number],
+    sources: VocalProfile["sources"],
+  ) {
+    const name = importedPerformanceName(source.originalFilename),
+      summary = voiceSourceSummary(source, sources);
+    if (
+      !window.confirm(
+        `Permanently delete "${name}" and all ${summary.partCount} stored parts? This removes ${Math.round(summary.usableSeconds)} usable seconds from this vocal profile.`,
+      )
+    )
+      return;
+    setProfileBusy(true);
+    setProfileNotice(`Deleting ${name} securely…`);
+    try {
+      const response = await fetch(
+          `/api/vocal-profiles/${profileId}/sources/${source.id}`,
+          { method: "DELETE" },
+        ),
+        payload = (await response.json()) as {
+          deleted?: { sourceCount: number; usableSecondsRemoved: number };
+          error?: { message: string };
+        };
+      if (!response.ok || !payload.deleted)
+        throw new Error(payload.error?.message || "The vocal import could not be deleted.");
+      setProfileNotice(
+        `${name} deleted · ${payload.deleted.sourceCount} stored parts and ${Math.round(payload.deleted.usableSecondsRemoved)} usable seconds removed.`,
+      );
+      await loadProfiles();
+    } catch (error) {
+      setProfileNotice(
+        error instanceof Error ? error.message : "The vocal import could not be deleted.",
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
   function discardPreview() {
     if (preview) URL.revokeObjectURL(preview.url);
     setPreview(null);
@@ -1264,6 +1446,28 @@ export default function StudioApp() {
     }
     if (recorder.current?.state === "recording") recorder.current.stop();
   }
+  const filtered = useMemo(
+    () =>
+      songs
+        .filter((song) =>
+          (song.title + song.prompt)
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+        )
+        .filter((song) => {
+          if (librarySource === "imported") return song.provider === "user-upload";
+          if (librarySource === "generated") return song.provider !== "user-upload";
+          if (librarySource === "my-voice") return Boolean(song.vocalist);
+          return true;
+        })
+        .sort((left, right) => {
+          const difference =
+            new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+          return librarySort === "newest" ? difference : -difference;
+        }),
+    [songs, search, librarySort, librarySource],
+  );
+  const visibleLibrarySongs = filtered.slice(0, libraryVisibleCount);
   if (user === undefined)
     return (
       <div className="boot">
@@ -1272,9 +1476,6 @@ export default function StudioApp() {
       </div>
     );
   if (!user) return <AuthGate onAuthenticated={setUser} />;
-  const filtered = songs.filter((s) =>
-    (s.title + s.prompt).toLowerCase().includes(search.toLowerCase()),
-  );
   return (
     <div className="app-shell">
       <aside className="rail">
@@ -1348,6 +1549,35 @@ export default function StudioApp() {
             </span>
           </div>
         </header>
+        {activeGenerationJobs.length > 0 && (
+          <aside className="operation-status" role="status" aria-live="polite">
+            <div className="operation-status-title">
+              <i aria-hidden="true" />
+              <div>
+                <strong>Dozi is working</strong>
+                <span>
+                  {activeGenerationJobs.length === 1
+                    ? "Your song is being created. This status refreshes automatically."
+                    : `${activeGenerationJobs.length} songs are being created. This status refreshes automatically.`}
+                </span>
+              </div>
+            </div>
+            <div className="operation-status-jobs">
+              {activeGenerationJobs.slice(0, 2).map((song) => (
+                <div key={song.id}>
+                  <span>{song.title}</span>
+                  <strong>
+                    {labels[song.status]} · {song.progress}%
+                  </strong>
+                </div>
+              ))}
+              {activeGenerationJobs.length > 2 && (
+                <small>+{activeGenerationJobs.length - 2} more in progress</small>
+              )}
+            </div>
+            <button onClick={() => void loadSongs()}>Check now</button>
+          </aside>
+        )}
         {view === "create" ? (
           <div className="workspace">
             <section className="composer">
@@ -1388,6 +1618,35 @@ export default function StudioApp() {
               </div>
               {!instrumental && (
                 <>
+                  <div
+                    className={`vocalist-selector ${selectedVocalProfileId ? "active" : ""}`}
+                  >
+                    <div>
+                      <span>VOCALIST</span>
+                      <strong>
+                        {selectedVocalProfileId ? "Private artist voice" : "Generated vocalist"}
+                      </strong>
+                    </div>
+                    <select
+                      aria-label="Vocalist"
+                      value={selectedVocalProfileId}
+                      onChange={(event) => setSelectedVocalProfileId(event.target.value)}
+                    >
+                      <option value="">Provider vocalist</option>
+                      {activeVocalProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name} · My Voice V{profile.activeVersionNumber}
+                        </option>
+                      ))}
+                    </select>
+                    <small>
+                      {selectedVocalProfileId
+                        ? "Dozi keeps the generated melody and phrasing, applies your approved private voice locally, and retains the untouched provider master. This adds processing time."
+                        : activeVocalProfiles.length
+                          ? "Choose a trained My Voice profile, or keep the vocalist created by the music provider."
+                          : "Create and activate a trained profile in My Voice to sing with your own voice."}
+                    </small>
+                  </div>
                   <div className="section-head">
                     <span>LYRICS</span>
                     <button
@@ -1416,14 +1675,36 @@ export default function StudioApp() {
                   </label>
                   <label>
                     BPM
-                    <input type="number" value={plan.bpm} readOnly />
+                    <input
+                      type="number"
+                      min="40"
+                      max="220"
+                      value={songBpm}
+                      onChange={(event) => {
+                        const next = event.target.valueAsNumber;
+                        if (Number.isFinite(next))
+                          setSongBpm(Math.max(40, Math.min(220, Math.round(next))));
+                      }}
+                    />
                   </label>
                   <label>
                     Key
-                    <select defaultValue="F♯">
-                      <option>F♯</option>
-                      <option>D</option>
-                      <option>A</option>
+                    <select
+                      value={`${songKey}:${songScale}`}
+                      onChange={(event) => {
+                        const [nextKey, nextScale] = event.target.value.split(":");
+                        setSongKey(nextKey);
+                        setSongScale(nextScale as "major" | "minor");
+                      }}
+                    >
+                      {["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"].flatMap(
+                        (key) =>
+                          (["major", "minor"] as const).map((scale) => (
+                            <option key={`${key}:${scale}`} value={`${key}:${scale}`}>
+                              {key} {scale}
+                            </option>
+                          )),
+                      )}
                     </select>
                   </label>
                   <label>
@@ -1514,7 +1795,12 @@ export default function StudioApp() {
               ) : (
                 <p className="fineprint">
                   Creates a server-side{" "}
-                  {provider.name === "elevenlabs" ? "MP3" : "WAV"} master ·{" "}
+                  {selectedVocalProfileId && !instrumental
+                    ? "WAV master with private vocalist"
+                    : provider.name === "elevenlabs"
+                      ? "MP3 master"
+                      : "WAV master"}{" "}
+                  ·{" "}
                   {provider.name === "acestep" ? "ACE-Step" : provider.name}
                 </p>
               )}
@@ -1526,6 +1812,9 @@ export default function StudioApp() {
                   <span>{songs.length} songs</span>
                 </div>
                 <div className="results-actions">
+                  <button onClick={() => setSongImportOpen(true)}>
+                    Import full song
+                  </button>
                   <button onClick={() => setRepairImportOpen(true)}>
                     Import vocal for repair
                   </button>
@@ -1557,12 +1846,7 @@ export default function StudioApp() {
                         setRepairSong(song);
                         void loadProfiles();
                       }}
-                      onSeek={(p) => {
-                        setActive(s);
-                        setTime(p * s.duration);
-                        if (audio.current)
-                          audio.current.currentTime = p * s.duration;
-                      }}
+                      onSeek={(p) => playFromSongWaveform(s, p)}
                     />
                   ))
                 )}
@@ -1576,18 +1860,74 @@ export default function StudioApp() {
                 <Icon name="search" />
                 <input
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setLibraryVisibleCount(24);
+                  }}
                   placeholder="Search songs and prompts"
                 />
               </div>
-              <select aria-label="Sort library">
-                <option>Newest first</option>
-                <option>Oldest first</option>
-              </select>
+              <div className="library-actions">
+                <button onClick={() => setSongImportOpen(true)}>
+                  Import full song
+                </button>
+                <div className="library-view-toggle" role="group" aria-label="Library layout">
+                  <button
+                    className={libraryView === "grid" ? "active" : ""}
+                    aria-pressed={libraryView === "grid"}
+                    onClick={() => setLibraryView("grid")}
+                  >
+                    Grid
+                  </button>
+                  <button
+                    className={libraryView === "list" ? "active" : ""}
+                    aria-pressed={libraryView === "list"}
+                    onClick={() => setLibraryView("list")}
+                  >
+                    List
+                  </button>
+                </div>
+                <select
+                  aria-label="Filter library"
+                  value={librarySource}
+                  onChange={(event) => {
+                    setLibrarySource(
+                      event.target.value as
+                        | "all"
+                        | "generated"
+                        | "imported"
+                        | "my-voice",
+                    );
+                    setLibraryVisibleCount(24);
+                  }}
+                >
+                  <option value="all">All songs</option>
+                  <option value="generated">Generated</option>
+                  <option value="imported">Imported</option>
+                  <option value="my-voice">My Voice</option>
+                </select>
+                <select
+                  aria-label="Sort library"
+                  value={librarySort}
+                  onChange={(event) => {
+                    setLibrarySort(event.target.value as "newest" | "oldest");
+                    setLibraryVisibleCount(24);
+                  }}
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                </select>
+              </div>
             </div>
+            {libraryNotice && (
+              <p className="library-notice" role="status">
+                {libraryNotice}
+              </p>
+            )}
             {filtered.length ? (
-              <div className="library-grid">
-                {filtered.map((s, i) => (
+              <>
+              <div className={`library-grid ${libraryView === "list" ? "list" : ""}`}>
+                {visibleLibrarySongs.map((s, i) => (
                   <article key={s.id}>
                     <div className="library-cover" data-tone={i % 3}>
                       <button
@@ -1608,16 +1948,37 @@ export default function StudioApp() {
                       {s.genre} · V{s.version}
                     </p>
                     <small>{new Date(s.createdAt).toLocaleString()}</small>
-                    <button
-                      className="library-open"
-                      disabled={s.status !== "COMPLETE"}
-                      onClick={() => void openWorkspace(s)}
-                    >
-                      Open tracks
-                    </button>
+                    <div className="library-card-actions">
+                      <button
+                        className="library-open"
+                        disabled={s.status !== "COMPLETE"}
+                        onClick={() => void openWorkspace(s)}
+                      >
+                        Open tracks
+                      </button>
+                      {s.songId && (
+                        <button
+                          className="library-archive"
+                          onClick={() => setArchiveCandidate(s)}
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
                   </article>
                 ))}
               </div>
+              <div className="library-results-footer">
+                <span>
+                  Showing {visibleLibrarySongs.length} of {filtered.length} songs
+                </span>
+                {visibleLibrarySongs.length < filtered.length && (
+                  <button onClick={() => setLibraryVisibleCount((count) => count + 24)}>
+                    Show 24 more
+                  </button>
+                )}
+              </div>
+              </>
             ) : (
               <div className="empty">
                 <h3>No songs found</h3>
@@ -1892,7 +2253,20 @@ export default function StudioApp() {
                                   : ""}
                               </small>
                             </div>
-                            <audio controls preload="none" src={source.audioUrl} />
+                            <div className="voice-take-media">
+                              <audio controls preload="none" src={source.audioUrl} />
+                              {source.sourceType === "OWNED_VOCAL_BOUNCE" && (
+                                <button
+                                  className="delete-voice-import"
+                                  disabled={profileBusy}
+                                  onClick={() =>
+                                    void deleteVocalImport(p.id, source, p.sources)
+                                  }
+                                >
+                                  Delete import
+                                </button>
+                              )}
+                            </div>
                           </div>
                         })}
                       </div>
@@ -2031,6 +2405,15 @@ export default function StudioApp() {
         <audio
           ref={audio}
           src={active?.audioUrl}
+          onLoadedMetadata={(event) => {
+            const start = pendingSongStart.current;
+            if (start === null) return;
+            const element = event.currentTarget;
+            element.currentTime = Math.min(start, element.duration || start);
+            pendingSongStart.current = null;
+            setTime(element.currentTime);
+            if (playing) void element.play().catch(() => setPlaying(false));
+          }}
           onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
           onEnded={() => setPlaying(false)}
         />
@@ -2112,6 +2495,16 @@ export default function StudioApp() {
           }}
         />
       )}
+      {songImportOpen && (
+        <FullSongImportModal
+          onClose={() => setSongImportOpen(false)}
+          onImported={(song) => {
+            setSongs((items) => [song, ...items]);
+            setSongImportOpen(false);
+            void openWorkspace(song);
+          }}
+        />
+      )}
       {profileError && (
         <div className="error-modal-backdrop" role="presentation">
           <section
@@ -2133,6 +2526,217 @@ export default function StudioApp() {
           </section>
         </div>
       )}
+      {archiveCandidate && (
+        <div className="error-modal-backdrop" role="presentation">
+          <section
+            className="archive-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="archive-song-title"
+          >
+            <small>ARCHIVE SONG</small>
+            <h2 id="archive-song-title">Archive {archiveCandidate.title}?</h2>
+            <p>
+              This removes the song from your active Library. Its private audio
+              and version history remain preserved and are not deleted.
+            </p>
+            <div>
+              <button disabled={archiveBusy} onClick={() => setArchiveCandidate(null)}>
+                Keep song
+              </button>
+              <button disabled={archiveBusy} onClick={() => void archiveLibrarySong()}>
+                {archiveBusy ? "Archiving…" : "Archive song"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FullSongImportModal({
+  onClose,
+  onImported,
+}: {
+  onClose: () => void;
+  onImported: (song: Song) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null),
+    [title, setTitle] = useState(""),
+    [bpm, setBpm] = useState(120),
+    [keyScale, setKeyScale] = useState("C:major"),
+    [rightsAttested, setRightsAttested] = useState(false),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState(""),
+    [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file || !rightsAttested || busy || !title.trim()) return;
+    setBusy(true);
+    setError("");
+    setMessage("Reading and checking the song…");
+    try {
+      const decoder = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await decoder.decodeAudioData(await file.arrayBuffer());
+      } finally {
+        await decoder.close();
+      }
+      if (decoded.duration < 1 || decoded.duration > 600)
+        throw new Error("Choose a song between 1 second and 10 minutes long.");
+      setMessage("Preparing a private studio-quality master…");
+      const sampleRate = 48000,
+        renderer = new OfflineAudioContext(
+          2,
+          Math.ceil(decoded.duration * sampleRate),
+          sampleRate,
+        ),
+        source = renderer.createBufferSource();
+      source.buffer = decoded;
+      source.connect(renderer.destination);
+      source.start();
+      const rendered = await renderer.startRendering(),
+        wav = encodeStereoPcm16Wav(rendered);
+      if (wav.size > 120 * 1024 * 1024)
+        throw new Error("This song is too large after preparation. Choose a shorter file.");
+      setMessage("Saving the song securely…");
+      const form = new FormData(),
+        [musicalKey, scale] = keyScale.split(":");
+      form.set(
+        "audio",
+        new File([wav], `${title.trim()}.wav`, { type: "audio/wav" }),
+      );
+      form.set("title", title.trim());
+      form.set("bpm", String(bpm));
+      form.set("key", musicalKey);
+      form.set("scale", scale);
+      form.set("rightsAttested", "true");
+      const response = await fetch("/api/songs/import", {
+          method: "POST",
+          body: form,
+        }),
+        responseText = await response.text();
+      let payload: { song?: Song; error?: { message: string } } = {};
+      try {
+        payload = JSON.parse(responseText) as typeof payload;
+      } catch {
+        if (response.status === 413)
+          throw new Error("The prepared song exceeded the local upload limit.");
+        throw new Error(responseText.trim() || "The song could not be imported.");
+      }
+      if (!response.ok || !payload.song)
+        throw new Error(payload.error?.message || "The song could not be imported.");
+      setMessage("Import complete. Opening the workspace…");
+      onImported(payload.song);
+    } catch (reason) {
+      setMessage("");
+      setError(reason instanceof Error ? reason.message : "The song could not be imported.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="repair-modal-backdrop" role="presentation">
+      <section
+        className="repair-modal repair-import-modal song-import-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="song-import-title"
+      >
+        <div className="repair-modal-head">
+          <div>
+            <small>PRIVATE SONG IMPORT</small>
+            <h2 id="song-import-title">Import a full song</h2>
+          </div>
+          <button aria-label="Close song import" disabled={busy} onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <p className="repair-import-help">
+          Choose a full mix that you own or control. Dozi keeps the original
+          private and creates derived stems for editing without changing it.
+        </p>
+        <form className="repair-form" onSubmit={submit}>
+          <label className="repair-file-picker">
+            SONG FILE
+            <input
+              type="file"
+              accept="audio/*,.wav,.flac,.mp3,.m4a,.aiff,.aif,.ogg"
+              required
+              disabled={busy}
+              onChange={(event) => {
+                const selected = event.target.files?.[0] || null;
+                setFile(selected);
+                if (selected && !title)
+                  setTitle(selected.name.replace(/\.[^.]+$/, ""));
+                setError("");
+              }}
+            />
+          </label>
+          <label>
+            SONG TITLE
+            <input
+              value={title}
+              maxLength={120}
+              required
+              disabled={busy}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+          <div className="song-import-grid">
+            <label>
+              BPM
+              <input
+                type="number"
+                min="40"
+                max="220"
+                value={bpm}
+                disabled={busy}
+                onChange={(event) => setBpm(event.target.valueAsNumber)}
+              />
+            </label>
+            <label>
+              KEY
+              <select
+                value={keyScale}
+                disabled={busy}
+                onChange={(event) => setKeyScale(event.target.value)}
+              >
+                {["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"].flatMap(
+                  (key) =>
+                    (["major", "minor"] as const).map((scale) => (
+                      <option key={`${key}:${scale}`} value={`${key}:${scale}`}>
+                        {key} {scale}
+                      </option>
+                    )),
+                )}
+              </select>
+            </label>
+          </div>
+          <label className="repair-attestation">
+            <input
+              type="checkbox"
+              checked={rightsAttested}
+              disabled={busy}
+              onChange={(event) => setRightsAttested(event.target.checked)}
+            />
+            <span>
+              <strong>I own or control this song recording</strong>
+              <small>It will remain private within my Dozi account.</small>
+            </span>
+          </label>
+          <button
+            className="repair-primary"
+            disabled={!file || !title.trim() || !rightsAttested || busy}
+          >
+            {busy ? "Importing…" : "Import and open workspace"}
+          </button>
+        </form>
+        {message && <p className="song-import-status" role="status">{message}</p>}
+        {error && <p className="repair-error" role="alert">{error}</p>}
+      </section>
     </div>
   );
 }
@@ -2801,9 +3405,10 @@ function MultitrackWorkspace({
 }) {
   const [versionId, setVersionId] = useState(data.versions[0]?.id || ""),
     [playing, setPlaying] = useState(false),
+    [switchingVersionId, setSwitchingVersionId] = useState(""),
     [position, setPosition] = useState(0),
     [auditionMode, setAuditionMode] = useState<"tracks" | "master">(
-      data.versions[0]?.provider === "dozi-mixer" ? "master" : "tracks",
+      data.versions[0]?.audioUrl ? "master" : "tracks",
     ),
     [muted, setMuted] = useState<Record<string, boolean>>({}),
     [soloed, setSoloed] = useState<Record<string, boolean>>({}),
@@ -2819,9 +3424,14 @@ function MultitrackWorkspace({
     [separationError, setSeparationError] = useState("");
   const [mixBusy, setMixBusy] = useState<"" | "saving" | "rendering">(""),
     [mixNotice, setMixNotice] = useState(""),
-    [mixError, setMixError] = useState("");
+    [mixError, setMixError] = useState(""),
+    [replaceTrack, setReplaceTrack] = useState<TrackAsset | null>(null),
+    [replaceFile, setReplaceFile] = useState<File | null>(null),
+    [replaceRights, setReplaceRights] = useState(false),
+    [replaceBusy, setReplaceBusy] = useState(false),
+    [replaceError, setReplaceError] = useState("");
   const elements = useRef<Record<string, HTMLAudioElement | null>>({}),
-    masterElement = useRef<HTMLAudioElement | null>(null),
+    masterElements = useRef<Record<string, HTMLAudioElement | null>>({}),
     context = useRef<AudioContext | null>(null),
     nodes = useRef<
       Record<
@@ -2836,13 +3446,16 @@ function MultitrackWorkspace({
     frame = useRef<number | null>(null),
     positionRef = useRef(0),
     clockStart = useRef(0),
-    started = useRef(new Set<string>());
+    started = useRef(new Set<string>()),
+    versionSwitchToken = useRef(0),
+    togglePlaybackRef = useRef<() => Promise<void>>(async () => undefined),
+    returnToStartRef = useRef<() => Promise<void>>(async () => undefined);
   const version =
       data.versions.find((item) => item.id === versionId) || data.versions[0],
     tracks = useMemo(() => {
       if (!version) return [];
       const stems = version.assets.filter((asset) =>
-        ["NATIVE_TRACK", "DERIVED_STEM"].includes(asset.role),
+        ["NATIVE_TRACK", "DERIVED_STEM", "EFFECT_RETURN"].includes(asset.role),
       );
       if (stems.length) return stems;
       const premaster = version.assets.find(
@@ -2854,26 +3467,172 @@ function MultitrackWorkspace({
       return premaster ? [premaster] : master ? [master] : version.assets.slice(0, 1);
     }, [version]),
     hasStems = tracks.length > 1,
+    hasGeneratedLeadVocal = tracks.some(
+      (track) =>
+        track.role === "NATIVE_TRACK" && track.instrument === "Lead Vocal",
+    ),
+    generatedLeadVocal = tracks.find(
+      (track) =>
+        track.role === "NATIVE_TRACK" && track.instrument === "Lead Vocal",
+    ),
+    sourceVocalStem = tracks.find(
+      (track) =>
+        track.role === "DERIVED_STEM" && track.instrumentGroup === "VOCALS",
+    ),
+    hasVocalComparison = Boolean(generatedLeadVocal && sourceVocalStem),
     anySolo = tracks.some(
       (track) => soloed[track.id] ?? Boolean(track.metadata?.soloed),
-    );
+    ),
+    preloadedMasterIds = new Set([
+      version?.id,
+      ...data.versions
+        .filter((item) => item.audioUrl)
+        .slice(0, 2)
+        .map((item) => item.id),
+    ]);
   const formatTime = (seconds: number) =>
     `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
       .toString()
       .padStart(2, "0")}`;
-  function pauseElements() {
+  function pauseElements(exceptMaster?: HTMLAudioElement) {
     Object.values(elements.current).forEach((element) => element?.pause());
-    masterElement.current?.pause();
+    Object.values(masterElements.current).forEach((element) => {
+      if (element && element !== exceptMaster) {
+        element.pause();
+        element.volume = 1;
+      }
+    });
   }
-  function isMuted(track: TrackAsset) {
-    return muted[track.id] ?? Boolean(track.metadata?.muted);
+  function pauseTrackElements() {
+    Object.values(elements.current).forEach((element) => element?.pause());
   }
-  function isSoloed(track: TrackAsset) {
-    return soloed[track.id] ?? Boolean(track.metadata?.soloed);
+  async function waitUntilPlayable(element: HTMLAudioElement) {
+    if (element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => finish(() => reject(new Error("The comparison master took too long to load."))),
+        10000,
+      );
+      const finish = (complete: () => void) => {
+        window.clearTimeout(timeout);
+        element.removeEventListener("canplay", ready);
+        element.removeEventListener("error", failed);
+        complete();
+      };
+      const ready = () => finish(resolve);
+      const failed = () =>
+        finish(() => reject(new Error("The comparison master could not be loaded.")));
+      element.addEventListener("canplay", ready, { once: true });
+      element.addEventListener("error", failed, { once: true });
+      element.load();
+    });
   }
-  function effectiveGain(track: TrackAsset) {
+  async function positionMediaElement(element: HTMLAudioElement, seconds: number) {
+    await waitUntilPlayable(element);
+    if (Math.abs(element.currentTime - seconds) < 0.015) return;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => finish(() => reject(new Error("Audio positioning took too long."))),
+        5000,
+      );
+      const finish = (complete: () => void) => {
+        window.clearTimeout(timeout);
+        element.removeEventListener("seeked", positioned);
+        element.removeEventListener("error", failed);
+        complete();
+      };
+      const positioned = () => finish(resolve);
+      const failed = () =>
+        finish(() => reject(new Error("Audio could not be positioned.")));
+      element.addEventListener("seeked", positioned, { once: true });
+      element.addEventListener("error", failed, { once: true });
+      element.currentTime = seconds;
+    });
+  }
+  async function crossfadeMasters(
+    previous: HTMLAudioElement | null,
+    next: HTMLAudioElement,
+  ) {
+    next.volume = previous && !previous.paused ? 0 : 1;
+    await next.play();
+    if (!previous || previous === next || previous.paused) return;
+    await new Promise<void>((resolve) => {
+      const start = performance.now(),
+        duration = 90;
+      const fade = (now: number) => {
+        const progress = Math.min(1, (now - start) / duration);
+        previous.volume = 1 - progress;
+        next.volume = progress;
+        if (progress < 1) requestAnimationFrame(fade);
+        else resolve();
+      };
+      requestAnimationFrame(fade);
+    });
+    previous.volume = 0;
+    next.volume = 1;
+  }
+  async function fadeElementVolume(
+    element: HTMLAudioElement,
+    from: number,
+    to: number,
+    duration = 55,
+  ) {
+    element.volume = from;
+    await new Promise<void>((resolve) => {
+      const startedAt = performance.now();
+      const fade = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        element.volume = from + (to - from) * progress;
+        if (progress < 1) requestAnimationFrame(fade);
+        else resolve();
+      };
+      requestAnimationFrame(fade);
+    });
+  }
+  const isMuted = useCallback((track: TrackAsset) => {
+    if (track.id in muted) return muted[track.id];
+    if ("muted" in track.metadata) return Boolean(track.metadata.muted);
+    return (
+      hasGeneratedLeadVocal &&
+      track.role === "DERIVED_STEM" &&
+      track.instrumentGroup === "VOCALS"
+    );
+  }, [muted, hasGeneratedLeadVocal]);
+  const isSoloed = useCallback(
+    (track: TrackAsset) => soloed[track.id] ?? Boolean(track.metadata?.soloed),
+    [soloed],
+  );
+  function chooseVocalComparison(choice: "generated" | "source") {
+    if (!generatedLeadVocal || !sourceVocalStem) return;
+    setMuted((values) => ({
+      ...values,
+      [generatedLeadVocal.id]: choice === "source",
+      [sourceVocalStem.id]: choice === "generated",
+    }));
+  }
+  const mixGain = useCallback((track: TrackAsset) => {
     if (isMuted(track) || (anySolo && !isSoloed(track))) return 0;
     return 10 ** ((levels[track.id] ?? track.gainDb ?? 0) / 20);
+  }, [anySolo, isMuted, isSoloed, levels]);
+  const playbackGain = useCallback(
+    (track: TrackAsset) => (auditionMode === "master" ? 0 : mixGain(track)),
+    [auditionMode, mixGain],
+  );
+  function setTrackGain(
+    graph: { gain: GainNode; panner: StereoPannerNode },
+    gain: number,
+    smooth = false,
+  ) {
+    const audioContext = context.current;
+    if (Math.abs(graph.gain.gain.value - gain) < 0.0001) return;
+    if (!smooth || !audioContext) {
+      graph.gain.gain.value = gain;
+      return;
+    }
+    const now = audioContext.currentTime;
+    graph.gain.gain.cancelScheduledValues(now);
+    graph.gain.gain.setValueAtTime(graph.gain.gain.value, now);
+    graph.gain.gain.linearRampToValueAtTime(gain, now + 0.035);
   }
   function currentSettings() {
     return tracks.map((track) => ({
@@ -2888,7 +3647,7 @@ function MultitrackWorkspace({
     for (const track of tracks) {
       const graph = nodes.current[track.id];
       if (!graph) continue;
-      graph.gain.gain.value = effectiveGain(track);
+      setTrackGain(graph, playbackGain(track));
       graph.panner.pan.value = pans[track.id] ?? track.pan ?? 0;
     }
   }
@@ -2907,6 +3666,63 @@ function MultitrackWorkspace({
     }
     applyMix();
   }
+  async function startTracksAt(playhead: number, startSilent = false) {
+    await ensureAudioGraph();
+    const active = tracks.flatMap((track) => {
+      const element = elements.current[track.id],
+        playableDuration = Math.max(
+          0,
+          (track.sourceEndSeconds ?? track.durationSeconds) -
+            track.sourceStartSeconds,
+        ),
+        trackEnd = track.timelineStartSeconds + playableDuration;
+      if (
+        !element ||
+        playhead < track.timelineStartSeconds ||
+        playhead >= trackEnd
+      )
+        return [];
+      return [
+        {
+          track,
+          element,
+          sourceTime:
+            track.sourceStartSeconds + playhead - track.timelineStartSeconds,
+        },
+      ];
+    });
+    await Promise.all(
+      active.map(({ element, sourceTime }) =>
+        positionMediaElement(element, sourceTime),
+      ),
+    );
+    if (startSilent)
+      active.forEach(({ track }) => {
+        const graph = nodes.current[track.id];
+        if (graph) graph.gain.gain.value = 0;
+      });
+    started.current.clear();
+    active.forEach(({ track }) => started.current.add(track.id));
+    clockStart.current = performance.now() - playhead * 1000;
+    await Promise.all(active.map(({ element }) => element.play()));
+  }
+  async function startMasterComparisonAt(playhead: number) {
+    const active = masterElements.current[version.id];
+    if (!active) return;
+    const comparisons = data.versions
+      .filter((item) => item.audioUrl && preloadedMasterIds.has(item.id))
+      .flatMap((item) => {
+        const element = masterElements.current[item.id];
+        return element ? [{ id: item.id, element }] : [];
+      });
+    await Promise.all(
+      comparisons.map(({ element }) => positionMediaElement(element, playhead)),
+    );
+    comparisons.forEach(({ id, element }) => {
+      element.volume = id === version.id ? 1 : 0;
+    });
+    await Promise.all(comparisons.map(({ element }) => element.play()));
+  }
   async function beginPlayback(mode: "tracks" | "master") {
     if (!version) return;
     if (positionRef.current >= version.duration - 0.01) {
@@ -2914,15 +3730,14 @@ function MultitrackWorkspace({
       setPosition(0);
     }
     if (mode === "master") {
-      const element = masterElement.current;
-      if (!element) return;
-      element.currentTime = positionRef.current;
-      await element.play();
+      await Promise.all([
+        startMasterComparisonAt(positionRef.current),
+        startTracksAt(positionRef.current, true),
+      ]);
     } else {
-      await ensureAudioGraph();
+      await startTracksAt(positionRef.current);
     }
     clockStart.current = performance.now() - positionRef.current * 1000;
-    started.current.clear();
     setPlaying(true);
   }
   async function togglePlayback() {
@@ -2938,19 +3753,94 @@ function MultitrackWorkspace({
       setPlaying(false);
     }
   }
+  useEffect(() => {
+    togglePlaybackRef.current = togglePlayback;
+    returnToStartRef.current = async () => seek(0);
+  });
+  useEffect(() => {
+    const isTransportKey = (event: KeyboardEvent, code: "Space" | "Enter") =>
+      event.code === code &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !document.querySelector('[role="dialog"][aria-modal="true"]');
+    const consumeTransportKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented) return;
+      if (isTransportKey(event, "Space")) {
+        consumeTransportKey(event);
+        void togglePlaybackRef.current();
+      } else if (isTransportKey(event, "Enter")) {
+        consumeTransportKey(event);
+        void returnToStartRef.current();
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (isTransportKey(event, "Space") || isTransportKey(event, "Enter"))
+        consumeTransportKey(event);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, []);
   async function changeAuditionMode(next: "tracks" | "master") {
     if (next === auditionMode) return;
-    const resume = playing;
-    setPlaying(false);
-    pauseElements();
-    started.current.clear();
-    setAuditionMode(next);
-    if (resume)
-      try {
-        await beginPlayback(next);
-      } catch {
-        setMixError("The selected audio could not start playing.");
+    if (!playing) {
+      setAuditionMode(next);
+      return;
+    }
+    try {
+      const playhead =
+          auditionMode === "master"
+            ? masterElements.current[version.id]?.currentTime ?? positionRef.current
+            : positionRef.current,
+        master = masterElements.current[version.id];
+      if (!master) throw new Error("The saved master is not ready for comparison.");
+      let handoffPlayhead = playhead;
+      if (next === "master") {
+        await positionMediaElement(master, playhead);
+        master.volume = 0;
+        await master.play();
+        for (const track of tracks) {
+          const graph = nodes.current[track.id];
+          if (graph) setTrackGain(graph, 0, true);
+        }
+        await fadeElementVolume(master, 0, 1);
+        handoffPlayhead = master.currentTime;
+      } else {
+        const tracksAreAlreadyRunning = tracks.some((track) => {
+          const element = elements.current[track.id];
+          return Boolean(element && !element.paused);
+        });
+        if (!tracksAreAlreadyRunning) await startTracksAt(playhead, true);
+        for (const track of tracks) {
+          const graph = nodes.current[track.id];
+          if (graph) setTrackGain(graph, mixGain(track), true);
+        }
+        await fadeElementVolume(master, master.volume, 0);
+        master.pause();
+        master.volume = 1;
+        handoffPlayhead = Math.min(
+          version.duration,
+          (performance.now() - clockStart.current) / 1000,
+        );
       }
+      positionRef.current = handoffPlayhead;
+      clockStart.current = performance.now() - handoffPlayhead * 1000;
+      setPosition(handoffPlayhead);
+      setAuditionMode(next);
+      setMixError("");
+    } catch (error) {
+      setMixError(
+        error instanceof Error ? error.message : "The selected audio could not start playing.",
+      );
+    }
   }
   async function startSeparation() {
     if (!version) return;
@@ -3035,7 +3925,7 @@ function MultitrackWorkspace({
             ),
           );
         source.buffer = decoded;
-        gain.gain.value = effectiveGain(track);
+        gain.gain.value = mixGain(track);
         panner.pan.value = pans[track.id] ?? track.pan ?? 0;
         source.connect(gain).connect(panner).connect(renderer.destination);
         if (available > 0) source.start(track.timelineStartSeconds, offset, available);
@@ -3081,57 +3971,196 @@ function MultitrackWorkspace({
       setMixBusy("");
     }
   }
-  function seek(next: number) {
+  async function submitTrackReplacement() {
+    if (!version || !replaceTrack || !replaceFile || !replaceRights) return;
+    setReplaceBusy(true);
+    setReplaceError("");
+    setMixError("");
+    setMixNotice("Preparing the aligned replacement track…");
+    setPlaying(false);
+    pauseElements();
+    try {
+      const decoder = new AudioContext();
+      let decoded: AudioBuffer;
+      try {
+        decoded = await decoder.decodeAudioData(await replaceFile.arrayBuffer());
+      } finally {
+        await decoder.close();
+      }
+      if (Math.abs(decoded.duration - version.duration) > 0.2)
+        throw new Error(
+          `This file is ${formatTime(decoded.duration)}, but Version ${version.version} is ${formatTime(version.duration)}. Export a full-length aligned stem and try again.`,
+        );
+      const sampleRate = 48000,
+        renderer = new OfflineAudioContext(
+          2,
+          Math.ceil(version.duration * sampleRate),
+          sampleRate,
+        ),
+        source = renderer.createBufferSource();
+      source.buffer = decoded;
+      source.connect(renderer.destination);
+      source.start(0);
+      const rendered = await renderer.startRendering(),
+        blob = encodeStereoPcm16Wav(rendered),
+        form = new FormData();
+      form.set(
+        "audio",
+        new File([blob], replaceFile.name.replace(/\.[^.]+$/, "") + ".wav", {
+          type: "audio/wav",
+        }),
+      );
+      form.set("rightsAttested", "true");
+      setMixNotice("Saving the private replacement as a new draft version…");
+      const response = await fetch(
+          `/api/songs/${data.song.id}/versions/${version.id}/tracks/${replaceTrack.id}/replace`,
+          { method: "POST", body: form },
+        ),
+        responseText = await response.text();
+      let payload: {
+        version?: { id: string; version: number };
+        error?: { message: string };
+      } = {};
+      try {
+        payload = JSON.parse(responseText) as typeof payload;
+      } catch {
+        if (response.status === 413)
+          throw new Error("This replacement exceeds the server upload limit.");
+        throw new Error(
+          response.ok
+            ? "The server returned an unreadable response while saving the replacement."
+            : responseText.trim() || "The replacement could not be saved.",
+        );
+      }
+      if (!response.ok || !payload.version)
+        throw new Error(payload.error?.message || "The replacement could not be saved.");
+      await onRefresh();
+      selectVersion(payload.version.id, "tracks");
+      setReplaceTrack(null);
+      setReplaceFile(null);
+      setReplaceRights(false);
+      setMixNotice(
+        `Version ${payload.version.version} is ready for live-track audition. Render it when the mix is approved.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "The replacement could not be saved.";
+      setReplaceError(message);
+      setMixNotice("");
+    } finally {
+      setReplaceBusy(false);
+    }
+  }
+  async function seek(next: number) {
     const bounded = Math.max(0, Math.min(version?.duration || 0, next));
+    const resume = playing;
+    if (resume) setPlaying(false);
     pauseElements();
     started.current.clear();
     positionRef.current = bounded;
     setPosition(bounded);
-    if (playing) {
-      clockStart.current = performance.now() - bounded * 1000;
-      if (auditionMode === "master" && masterElement.current) {
-        masterElement.current.currentTime = bounded;
-        void masterElement.current.play().catch(() => setPlaying(false));
-      }
+    if (!resume) return;
+    try {
+      await beginPlayback(auditionMode);
+    } catch {
+      setMixError("The tracks could not resume together at that position.");
+      setPlaying(false);
     }
   }
-  function selectVersion(
+  async function selectVersion(
     nextVersionId: string,
     nextMode?: "tracks" | "master",
   ) {
-    pauseElements();
+    const nextVersion = data.versions.find((item) => item.id === nextVersionId);
+    if (!nextVersion || nextVersion.id === version.id) return;
+    const switchToken = versionSwitchToken.current + 1;
+    versionSwitchToken.current = switchToken;
+    setSwitchingVersionId(nextVersionId);
+    const resume = playing,
+      targetMode =
+        nextMode || (nextVersion.audioUrl ? "master" : "tracks"),
+      currentMaster = masterElements.current[version.id],
+      nextMaster = masterElements.current[nextVersion.id];
+    let switchPosition =
+      auditionMode === "master" && currentMaster
+        ? currentMaster.currentTime
+        : positionRef.current;
+
+    if (resume && targetMode === "master" && nextMaster) {
+      try {
+        await waitUntilPlayable(nextMaster);
+        if (switchToken !== versionSwitchToken.current) return;
+        switchPosition =
+          auditionMode === "master" && currentMaster
+            ? currentMaster.currentTime
+            : (performance.now() - clockStart.current) / 1000;
+        const bounded = Math.max(0, Math.min(nextVersion.duration, switchPosition));
+        const alreadyRunningInSync =
+          auditionMode === "master" &&
+          currentMaster &&
+          !currentMaster.paused &&
+          !nextMaster.paused &&
+          Math.abs(nextMaster.currentTime - currentMaster.currentTime) < 0.05;
+        if (!alreadyRunningInSync) {
+          await positionMediaElement(nextMaster, bounded);
+          nextMaster.volume = 0;
+          await nextMaster.play();
+        }
+        if (switchToken !== versionSwitchToken.current) return;
+        if (auditionMode !== "master") pauseTrackElements();
+        await crossfadeMasters(
+          auditionMode === "master" ? currentMaster : null,
+          nextMaster,
+        );
+        const handoffPosition = nextMaster.currentTime;
+        positionRef.current = handoffPosition;
+        setPosition(handoffPosition);
+        clockStart.current = performance.now() - handoffPosition * 1000;
+        setMixError("");
+        setPlaying(true);
+      } catch (error) {
+        setMixError(
+          error instanceof Error
+            ? error.message
+            : "The comparison master could not start playing.",
+        );
+        setSwitchingVersionId("");
+        return;
+      }
+    } else {
+      pauseElements();
+      const bounded = Math.max(0, Math.min(nextVersion.duration, switchPosition));
+      positionRef.current = bounded;
+      setPosition(bounded);
+      if (resume) {
+        setPlaying(false);
+        setMixError(
+          "This draft has no saved master for continuous A/B playback. Its playhead position was preserved.",
+        );
+      }
+    }
     started.current.clear();
-    positionRef.current = 0;
-    setPosition(0);
-    setPlaying(false);
     setMuted({});
     setSoloed({});
     setLevels({});
     setPans({});
-    const nextVersion = data.versions.find((item) => item.id === nextVersionId);
-    setAuditionMode(
-      nextMode || (nextVersion?.provider === "dozi-mixer" ? "master" : "tracks"),
-    );
+    setAuditionMode(targetMode);
     setVersionId(nextVersionId);
+    setSwitchingVersionId("");
   }
   useEffect(() => {
     for (const track of tracks) {
       const graph = nodes.current[track.id];
       if (!graph) continue;
-      const trackMuted = muted[track.id] ?? Boolean(track.metadata?.muted),
-        trackSoloed = soloed[track.id] ?? Boolean(track.metadata?.soloed),
-        audible = !trackMuted && (!anySolo || trackSoloed);
-      graph.gain.gain.value = audible
-        ? 10 ** ((levels[track.id] ?? track.gainDb ?? 0) / 20)
-        : 0;
+      setTrackGain(graph, playbackGain(track), true);
       graph.panner.pan.value = pans[track.id] ?? track.pan ?? 0;
     }
-  }, [muted, soloed, levels, pans, anySolo, tracks]);
+  }, [pans, playbackGain, tracks]);
   useEffect(() => {
     if (!playing || !version) return;
     const tick = () => {
       if (auditionMode === "master") {
-        const element = masterElement.current;
+        const element = masterElements.current[version.id];
         if (!element || element.ended) {
           positionRef.current = version.duration;
           setPosition(version.duration);
@@ -3140,6 +4169,35 @@ function MultitrackWorkspace({
         }
         positionRef.current = element.currentTime;
         setPosition(element.currentTime);
+        for (const comparison of Object.values(masterElements.current)) {
+          if (
+            comparison &&
+            comparison !== element &&
+            !comparison.paused &&
+            Math.abs(comparison.currentTime - element.currentTime) > 0.05
+          )
+            comparison.currentTime = element.currentTime;
+        }
+        for (const track of tracks) {
+          const trackElement = elements.current[track.id],
+            playableDuration = Math.max(
+              0,
+              (track.sourceEndSeconds ?? track.durationSeconds) -
+                track.sourceStartSeconds,
+            ),
+            trackEnd = track.timelineStartSeconds + playableDuration;
+          if (
+            !trackElement ||
+            trackElement.paused ||
+            element.currentTime < track.timelineStartSeconds ||
+            element.currentTime >= trackEnd
+          )
+            continue;
+          const expectedTime =
+            track.sourceStartSeconds + element.currentTime - track.timelineStartSeconds;
+          if (Math.abs(trackElement.currentTime - expectedTime) > 0.04)
+            trackElement.currentTime = expectedTime;
+        }
         frame.current = requestAnimationFrame(tick);
         return;
       }
@@ -3171,7 +4229,7 @@ function MultitrackWorkspace({
             element.currentTime = sourceTime;
             started.current.add(track.id);
             void element.play().catch(() => setPlaying(false));
-          } else if (Math.abs(element.currentTime - sourceTime) > 0.12) {
+          } else if (Math.abs(element.currentTime - sourceTime) > 0.05) {
             element.currentTime = sourceTime;
           }
         } else if (started.current.has(track.id)) {
@@ -3248,8 +4306,10 @@ function MultitrackWorkspace({
         <label>
           VERSION
           <select
-            value={version.id}
-            onChange={(event) => selectVersion(event.target.value)}
+            value={switchingVersionId || version.id}
+            disabled={Boolean(switchingVersionId)}
+            aria-busy={Boolean(switchingVersionId)}
+            onChange={(event) => void selectVersion(event.target.value)}
           >
             {data.versions.map((item) => (
               <option key={item.id} value={item.id}>
@@ -3257,24 +4317,34 @@ function MultitrackWorkspace({
               </option>
             ))}
           </select>
+          {switchingVersionId && (
+            <small role="status">Switching at the current playhead…</small>
+          )}
         </label>
       </div>
       <div className="mixer-transport">
-        {version.audioUrl && (
-          <audio
-            ref={masterElement}
-            src={version.audioUrl}
-            preload="metadata"
-            onEnded={() => {
-              positionRef.current = version.duration;
-              setPosition(version.duration);
-              setPlaying(false);
-            }}
-          />
+        {data.versions.map((item) =>
+          item.audioUrl ? (
+            <audio
+              key={item.id}
+              ref={(element) => {
+                masterElements.current[item.id] = element;
+              }}
+              src={item.audioUrl}
+              preload={preloadedMasterIds.has(item.id) ? "auto" : "metadata"}
+              onEnded={() => {
+                if (item.id !== version.id) return;
+                positionRef.current = item.duration;
+                setPosition(item.duration);
+                setPlaying(false);
+              }}
+            />
+          ) : null,
         )}
         <button
           className="mixer-play"
           aria-label={playing ? "Pause all tracks" : "Play all tracks"}
+          aria-keyshortcuts="Space Enter"
           onClick={() => void togglePlayback()}
         >
           <Icon name={playing ? "pause" : "play"} />
@@ -3287,9 +4357,10 @@ function MultitrackWorkspace({
           max={version.duration}
           step="0.01"
           value={position}
-          onChange={(event) => seek(Number(event.target.value))}
+          onChange={(event) => void seek(Number(event.target.value))}
         />
         <span>{formatTime(version.duration)}</span>
+        <small className="mixer-shortcut"><kbd>Space</kbd> Play / pause · <kbd>Return</kbd> Go to start</small>
       </div>
       {hasStems && version.audioUrl && (
         <div className="audition-mode" role="group" aria-label="Audition source">
@@ -3310,9 +4381,39 @@ function MultitrackWorkspace({
           </button>
           <small>
             {auditionMode === "master"
-              ? "Playing the saved Version master"
+              ? "Playing the saved Version master · switch to Live tracks to mute, solo, or adjust stems"
               : "Playing the editable stem reconstruction"}
           </small>
+        </div>
+      )}
+      {hasVocalComparison && auditionMode === "tracks" && (
+        <div className="audition-mode" role="group" aria-label="Vocal comparison">
+          <span>VOCAL A/B</span>
+          <button
+            className={!isMuted(generatedLeadVocal!) && isMuted(sourceVocalStem!) ? "active" : ""}
+            aria-pressed={!isMuted(generatedLeadVocal!) && isMuted(sourceVocalStem!)}
+            onClick={() => chooseVocalComparison("generated")}
+          >
+            Generated Lead
+          </button>
+          <button
+            className={isMuted(generatedLeadVocal!) && !isMuted(sourceVocalStem!) ? "active" : ""}
+            aria-pressed={isMuted(generatedLeadVocal!) && !isMuted(sourceVocalStem!)}
+            onClick={() => chooseVocalComparison("source")}
+          >
+            Source Vocal
+          </button>
+          <small>Switches only the two vocal tracks; the rest of the live mix continues playing.</small>
+        </div>
+      )}
+      {hasStems && !version.audioUrl && (
+        <div className="draft-version-note" role="status">
+          <div>
+            <strong>Editable track draft</strong>
+            <span>
+              This version has no finished master yet. You are hearing the live tracks; render a new mix when the replacement is approved.
+            </span>
+          </div>
         </div>
       )}
       {!hasStems && (
@@ -3342,10 +4443,24 @@ function MultitrackWorkspace({
         </div>
       )}
       {separationError && <p className="separation-error" role="alert">{separationError}</p>}
+      {hasGeneratedLeadVocal && hasStems && (
+        <div className="draft-version-note" role="status">
+          <div>
+            <strong>Generated lead vocal active</strong>
+            <span>
+              The Source Vocal Stem is muted by default so it does not double the generated Lead Vocal. You can unmute it at any time to compare them.
+            </span>
+          </div>
+        </div>
+      )}
       <div className="track-list">
         {tracks.map((track, index) => {
-          const name =
-            track.instrument ||
+          const isSourceVocal =
+              hasGeneratedLeadVocal &&
+              track.role === "DERIVED_STEM" &&
+              track.instrumentGroup === "VOCALS",
+            name =
+            (isSourceVocal ? "Source Vocal Stem" : track.instrument) ||
             (track.role === "MASTER"
               ? "Master"
               : track.role.toLowerCase().replaceAll("_", " "));
@@ -3363,10 +4478,16 @@ function MultitrackWorkspace({
                 <button
                   className={isMuted(track) ? "active" : ""}
                   aria-label={`Mute ${name}`}
+                  disabled={auditionMode === "master"}
+                  title={
+                    auditionMode === "master"
+                      ? "Mute and solo are available in Live tracks."
+                      : undefined
+                  }
                   onClick={() =>
                     setMuted((values) => ({
                       ...values,
-                      [track.id]: !(values[track.id] ?? Boolean(track.metadata?.muted)),
+                      [track.id]: !isMuted(track),
                     }))
                   }
                 >
@@ -3375,6 +4496,12 @@ function MultitrackWorkspace({
                 <button
                   className={isSoloed(track) ? "active" : ""}
                   aria-label={`Solo ${name}`}
+                  disabled={auditionMode === "master"}
+                  title={
+                    auditionMode === "master"
+                      ? "Mute and solo are available in Live tracks."
+                      : undefined
+                  }
                   onClick={() =>
                     setSoloed((values) => ({
                       ...values,
@@ -3391,19 +4518,38 @@ function MultitrackWorkspace({
                 <a href={track.audioUrl} download={`${data.song.title}-${name}.wav`}>
                   Export stem
                 </a>
+                {hasStems && ["NATIVE_TRACK", "DERIVED_STEM"].includes(track.role) && (
+                  <button
+                    className="replace-track"
+                    onClick={() => {
+                      setReplaceTrack(track);
+                      setReplaceFile(null);
+                      setReplaceRights(false);
+                      setReplaceError("");
+                    }}
+                  >
+                    Replace track
+                  </button>
+                )}
               </div>
               <Wave
                 compact
                 data={track.waveform || []}
                 progress={position / version.duration}
-                onSeek={(fraction) => seek(fraction * version.duration)}
+                onSeek={(fraction) => void seek(fraction * version.duration)}
               />
               <label className="track-control">
                 LEVEL
-                <input
-                  aria-label={`${name} level`}
-                  type="range"
-                  min="-60"
+                    <input
+                      aria-label={`${name} level`}
+                      type="range"
+                      disabled={auditionMode === "master"}
+                      title={
+                        auditionMode === "master"
+                          ? "Level is available in Live tracks."
+                          : undefined
+                      }
+                      min="-60"
                   max="6"
                   step="0.5"
                   value={levels[track.id] ?? track.gainDb ?? 0}
@@ -3418,10 +4564,16 @@ function MultitrackWorkspace({
               </label>
               <label className="track-control pan-control">
                 PAN
-                <input
-                  aria-label={`${name} pan`}
-                  type="range"
-                  min="-1"
+                    <input
+                      aria-label={`${name} pan`}
+                      type="range"
+                      disabled={auditionMode === "master"}
+                      title={
+                        auditionMode === "master"
+                          ? "Pan is available in Live tracks."
+                          : undefined
+                      }
+                      min="-1"
                   max="1"
                   step="0.05"
                   value={pans[track.id] ?? track.pan ?? 0}
@@ -3465,6 +4617,70 @@ function MultitrackWorkspace({
       )}
       {mixNotice && <p className="mix-notice" role="status">{mixNotice}</p>}
       {mixError && <p className="mix-error" role="alert">{mixError}</p>}
+      {replaceTrack && (
+        <div className="repair-modal-backdrop" role="presentation">
+          <section
+            className="repair-modal repair-import-modal track-replace-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="track-replace-heading"
+          >
+            <div className="repair-modal-head">
+              <div>
+                <small>NON-DESTRUCTIVE TRACK EDIT</small>
+                <h2 id="track-replace-heading">
+                  Replace {replaceTrack.instrument || replaceTrack.role.toLowerCase().replaceAll("_", " ")}
+                </h2>
+              </div>
+              <button
+                aria-label="Close track replacement"
+                disabled={replaceBusy}
+                onClick={() => setReplaceTrack(null)}
+              >
+                ×
+              </button>
+            </div>
+            <p className="repair-import-help">
+              Choose a vocal or instrumental stem exported from the same song timeline. It must begin at 0:00 and match Version {version.version}&apos;s full {formatTime(version.duration)} duration. Dozi will make a private draft version and leave this version unchanged.
+            </p>
+            <label className="repair-file-picker">
+              ALIGNED REPLACEMENT FILE
+              <input
+                type="file"
+                accept="audio/*,.wav,.flac,.mp3,.m4a,.aiff,.aif"
+                disabled={replaceBusy}
+                onChange={(event) => {
+                  setReplaceFile(event.target.files?.[0] || null);
+                  setReplaceError("");
+                }}
+              />
+            </label>
+            {replaceFile && (
+              <p className="track-replace-file">Selected: {replaceFile.name}</p>
+            )}
+            <label className="track-replace-rights">
+              <input
+                type="checkbox"
+                checked={replaceRights}
+                disabled={replaceBusy}
+                onChange={(event) => setReplaceRights(event.target.checked)}
+              />
+              <span>
+                <strong>I own or control this recording</strong>
+                It will remain private within my Dozi account.
+              </span>
+            </label>
+            {replaceError && <p className="mix-error" role="alert">{replaceError}</p>}
+            <button
+              className="track-replace-submit"
+              disabled={!replaceFile || !replaceRights || replaceBusy}
+              onClick={() => void submitTrackReplacement()}
+            >
+              {replaceBusy ? "Preparing and saving…" : "Create replacement draft"}
+            </button>
+          </section>
+        </div>
+      )}
       <p className="mixer-footnote">
         Mixer moves are non-destructive. Saving or rendering a new version leaves the source assets unchanged.
       </p>
@@ -3497,7 +4713,7 @@ function SongCard({
       `${Math.floor(n / 60)}:${Math.floor(n % 60)
         .toString()
         .padStart(2, "0")}`,
-    extension = s.provider === "elevenlabs" ? "mp3" : "wav";
+    extension = s.vocalist ? "wav" : s.provider === "elevenlabs" ? "mp3" : "wav";
   return (
     <article className="song-card">
       <div className="cover" data-tone={tone}>
@@ -3510,11 +4726,9 @@ function SongCard({
             <p>
               {s.genre} · {s.bpm} BPM · {s.musicalKey}
             </p>
+            {s.vocalist && <p className="song-vocalist">{s.vocalist}</p>}
           </div>
           <div className="song-actions">
-            <button aria-label="Favorite">
-              <Icon name="heart" />
-            </button>
             {s.audioUrl && (
               <a
                 href={s.audioUrl}
@@ -3524,9 +4738,6 @@ function SongCard({
                 <Icon name="download" />
               </a>
             )}
-            <button aria-label="More">
-              <Icon name="more" />
-            </button>
           </div>
         </div>
         {s.status === "COMPLETE" ? (
@@ -3534,6 +4745,7 @@ function SongCard({
             data={s.waveform}
             progress={active?.id === s.id ? time / s.duration : 0}
             onSeek={onSeek}
+            ariaLabel={`Play ${s.title} from this point`}
           />
         ) : (
           <div className="job-progress">
@@ -3552,6 +4764,9 @@ function SongCard({
             className="play"
             disabled={s.status !== "COMPLETE" || !s.audioUrl}
             onClick={() => onPlay(s)}
+            aria-label={
+              active?.id === s.id && playing ? `Pause ${s.title}` : `Play ${s.title}`
+            }
           >
             <Icon name={active?.id === s.id && playing ? "pause" : "play"} />
           </button>
