@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from .phrase_repair import _decode_audio, _encode_pcm16_wav, _waveform
+from .vocal_finish import finish_vocal
 
 logger = logging.getLogger("dozi.ai.artist_vocal")
 
@@ -73,6 +74,9 @@ def render_artist_vocal(
     separator_models: Path,
     separator_model: str,
     separator_device: str,
+    voice_identity_strength: float = 100,
+    compute_environment: dict[str, str] | None = None,
+    compute_metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if len(source_data) < 512:
         raise ValueError("VOCAL_IDENTITY_SOURCE_EMPTY")
@@ -163,7 +167,7 @@ def render_artist_vocal(
             "--index-rate",
             str(index_rate),
             "--rms-mix-rate",
-            os.getenv("DOZI_RVC_RMS_MIX_RATE", "1"),
+            os.getenv("DOZI_RVC_RMS_MIX_RATE", "0.5"),
             "--protect",
             os.getenv("DOZI_RVC_PROTECT", "0"),
             "--format",
@@ -173,6 +177,7 @@ def render_artist_vocal(
         if index_rate > 0:
             rvc_command.extend(["--index", str(index_path)])
         rvc_environment = os.environ.copy()
+        rvc_environment.update(compute_environment or {})
         rvc_environment["PYTHONPATH"] = str(rvc_root)
         numba_cache = Path(
             os.getenv(
@@ -211,26 +216,29 @@ def render_artist_vocal(
         )
         separated_vocal = _fit_length(separated_vocal, frames)
         converted_vocal = _fit_length(converted_vocal, frames)
+        converted_vocal = finish_vocal(converted_vocal, sample_rate)
         converted_vocal, vocal_gain_db = _bounded_rms_match(
             converted_vocal, separated_vocal, 6.0
         )
 
-        instrumental = np.zeros_like(source, dtype=np.float32)
-        for path in instrumental_paths:
-            stem, _ = _decode_audio(
-                path.read_bytes(),
-                sample_rate=sample_rate,
-                channel_count=channels,
-            )
-            instrumental += _fit_length(stem, frames)
-        rendered = instrumental + converted_vocal
+        voice_identity_strength = float(np.clip(voice_identity_strength, 0, 100))
+        blend = voice_identity_strength / 100.0
+        blended_vocal = separated_vocal * (1.0 - blend) + converted_vocal * blend
+        # Do not rebuild the instrumental by summing separated stems.  Stem
+        # models intentionally overlap material between stems, so summing
+        # drums, bass, guitar, piano, and other can cause phasey noise and
+        # level changes.  Removing the isolated vocal from the original keeps
+        # the authorized source performance intact while leaving room for the
+        # converted vocal.
+        instrumental = source - separated_vocal
+        rendered = instrumental + blended_vocal
         rendered, mix_gain_db = _bounded_rms_match(rendered, source, 3.0)
-        converted_vocal *= 10 ** (mix_gain_db / 20)
+        blended_vocal *= 10 ** (mix_gain_db / 20)
         rendered, limiter_gain_db = _limit(rendered)
-        converted_vocal *= 10 ** (limiter_gain_db / 20)
+        blended_vocal *= 10 ** (limiter_gain_db / 20)
 
         master_bytes = _encode_pcm16_wav(rendered, sample_rate)
-        vocal_bytes = _encode_pcm16_wav(converted_vocal, sample_rate)
+        vocal_bytes = _encode_pcm16_wav(blended_vocal, sample_rate)
         duration = round(frames / sample_rate, 6)
         common = {
             "mimeType": "audio/wav",
@@ -254,7 +262,7 @@ def render_artist_vocal(
                 "metadata": {
                     **common,
                     "checksum": hashlib.sha256(vocal_bytes).hexdigest(),
-                    "waveformData": _waveform(converted_vocal),
+                    "waveformData": _waveform(blended_vocal),
                 },
             },
             "processing": {
@@ -262,6 +270,10 @@ def render_artist_vocal(
                 "voiceModel": model_path.name,
                 "retrievalIndex": index_path.name,
                 "retrievalIndexRate": index_rate,
+                "vocalFinishing": "gentle-compression-short-room-v1",
+                "rmsMixRate": float(os.getenv("DOZI_RVC_RMS_MIX_RATE", "0.5")),
+                "voiceIdentityStrength": round(voice_identity_strength, 3),
+                "compute": compute_metadata or {},
                 "vocalGainDb": round(vocal_gain_db, 3),
                 "mixGainDb": round(mix_gain_db, 3),
                 "limiterGainDb": round(limiter_gain_db, 3),

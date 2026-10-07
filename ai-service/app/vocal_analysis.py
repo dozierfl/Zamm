@@ -7,6 +7,8 @@ from typing import Any
 import av
 import numpy as np
 
+from .coreml_classifier import classify_audio
+
 
 def analyze_vocal(data: bytes, minimum_usable_seconds: float = 15) -> dict[str, Any]:
     try:
@@ -57,7 +59,11 @@ def analyze_vocal(data: bytes, minimum_usable_seconds: float = 15) -> dict[str, 
     if abs(channel_balance_db) > 3: reasons.append("CHANNEL_IMBALANCE")
     passed = not reasons
     quality_score = max(0.0, min(100.0, 100 - silence_ratio * 45 - clipping_ratio * 5000 - max(0, abs(channel_balance_db) - 1) * 5))
-    return {"passed": passed, "qualityScore": round(quality_score, 2), "usableDurationSeconds": usable_seconds if passed else 0, "metrics": {"durationSeconds": round(duration, 3), "sampleRate": sample_rate, "channels": int(channels.shape[0]), "peak": round(peak, 6), "rmsDbfs": round(float(rms_db), 2), "silenceRatio": round(silence_ratio, 5), "clippingRatio": round(clipping_ratio, 7), "channelBalanceDb": round(channel_balance_db, 2)}, "reasons": reasons}
+    result = {"passed": passed, "qualityScore": round(quality_score, 2), "usableDurationSeconds": usable_seconds if passed else 0, "metrics": {"durationSeconds": round(duration, 3), "sampleRate": sample_rate, "channels": int(channels.shape[0]), "peak": round(peak, 6), "rmsDbfs": round(float(rms_db), 2), "silenceRatio": round(silence_ratio, 5), "clippingRatio": round(clipping_ratio, 7), "channelBalanceDb": round(channel_balance_db, 2)}, "reasons": reasons}
+    classification = classify_audio(mono, sample_rate)
+    if classification is not None:
+        result["machineAnalysis"] = classification
+    return result
 
 
 def verify_identity_phrase(data: bytes, expected_phrase: str) -> dict[str, Any]:
@@ -103,3 +109,35 @@ def verify_identity_phrase(data: bytes, expected_phrase: str) -> dict[str, Any]:
         "signal": signal,
         "reasons": reasons,
     }
+
+
+def transcribe_song_lyrics(data: bytes) -> dict[str, Any]:
+    """Return a private, editable lyric draft from an owned full-song import."""
+    import mlx_whisper
+
+    try:
+        container = av.open(io.BytesIO(data))
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=16000)
+        chunks = []
+        for frame in container.decode(audio=0):
+            for converted in resampler.resample(frame):
+                chunks.append(converted.to_ndarray().reshape(-1).astype(np.float32))
+    except Exception as exc:
+        raise ValueError("LYRICS_AUDIO_DECODE_FAILED") from exc
+    if not chunks:
+        raise ValueError("LYRICS_AUDIO_EMPTY")
+    transcription = mlx_whisper.transcribe(
+        np.concatenate(chunks),
+        path_or_hf_repo=os.getenv(
+            "WHISPER_LYRICS_MODEL",
+            os.getenv("WHISPER_MODEL", "mlx-community/whisper-tiny.en-mlx"),
+        ),
+        language="en",
+        task="transcribe",
+        initial_prompt="Song lyrics. Transcribe only the words that are sung.",
+        condition_on_previous_text=True,
+        verbose=None,
+    )["text"].strip()
+    if not transcription:
+        raise ValueError("LYRICS_TRANSCRIPTION_EMPTY")
+    return {"lyrics": transcription, "language": "en", "status": "DRAFT"}

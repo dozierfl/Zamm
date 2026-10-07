@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { getSql } from "../../../../db";
 import { apiError, requireUser } from "../../../../lib/auth";
 import type { AppBindings } from "../../../../lib/config";
+import { transcribePrivateSongLyrics } from "../../../../lib/lyrics-transcription";
 
 const bindings = env as unknown as AppBindings;
 const allowedKeys = new Set([
@@ -115,6 +116,7 @@ export async function POST(request: Request) {
       throw new Error("INVALID_SONG_IMPORT_AUDIO");
     const bytes = await audio.arrayBuffer(),
       media = inspectPcm16Wav(bytes),
+      transcript = await transcribePrivateSongLyrics(bytes, bindings),
       digest = await crypto.subtle.digest("SHA-256", bytes),
       checksum = [...new Uint8Array(digest)]
         .map((value) => value.toString(16).padStart(2, "0"))
@@ -145,7 +147,7 @@ export async function POST(request: Request) {
       },
       requestPayload = {
         prompt,
-        lyrics: "",
+        lyrics: transcript.lyrics,
         instrumental: false,
         durationSeconds: media.durationSeconds,
         outputMode: "MASTER_ONLY",
@@ -166,7 +168,7 @@ export async function POST(request: Request) {
       await sql.begin(async (tx) => {
         await tx`
           insert into songs(id,user_id,title,description,lyrics,is_instrumental,next_version_number)
-          values(${songId},${user.id},${title},${prompt},'',false,2)
+          values(${songId},${user.id},${title},${prompt},${transcript.lyrics},false,2)
         `;
         await tx`
           insert into generation_jobs(
@@ -191,6 +193,7 @@ export async function POST(request: Request) {
               purpose: "OWNED_FULL_MIX_IMPORT",
               rightsAttested: true,
               originalFilename: audio.name,
+              lyricsTranscriptionStatus: transcript.status,
             })}
           )
         `;
@@ -201,10 +204,11 @@ export async function POST(request: Request) {
             provider_model,provider_metadata,seed
           ) values(
             ${versionId},${songId},${jobId},1,${assetId},${media.durationSeconds},${bpm},
-            ${musicalKey},${scale},'',${prompt},${prompt},${tx.json(compositionPlan)},
+            ${musicalKey},${scale},${transcript.lyrics},${prompt},${prompt},${tx.json(compositionPlan)},
             'user-upload','owned-master-v1',${tx.json({
               purpose: "OWNED_FULL_MIX_IMPORT",
               originalFilename: audio.name,
+              lyricsTranscriptionStatus: transcript.status,
             })},0
           )
         `;
@@ -245,6 +249,10 @@ export async function POST(request: Request) {
           waveform: media.waveform,
           seed: 0,
           audioUrl: `/api/audio/${assetId}`,
+        },
+        lyricsTranscription: {
+          status: transcript.status,
+          found: Boolean(transcript.lyrics),
         },
       },
       { status: 201 },

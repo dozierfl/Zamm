@@ -460,6 +460,110 @@ textarea:focus {
 .song-vocalist {
   color: #aeca57 !important;
 }
+.vocal-cast {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #3e4b22;
+  border-radius: 10px;
+  background: #11150b;
+}
+.vocal-cast-empty {
+  display: grid;
+  gap: 7px;
+}
+.vocal-cast-head,
+.vocal-cast-empty > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.vocal-cast span {
+  display: block;
+  color: #9b9c96;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+.vocal-cast strong {
+  color: #d8ef87;
+  font-size: 11px;
+}
+.vocal-cast small,
+.vocal-cast p {
+  color: #8e9287;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.vocal-cast p {
+  margin: 9px 0 12px;
+}
+.vocal-cast-list {
+  display: grid;
+  gap: 8px;
+}
+.vocal-cast-row {
+  display: grid;
+  grid-template-columns: 0.8fr 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #303b22;
+  border-radius: 8px;
+}
+.vocal-cast-row legend {
+  padding: 0 4px;
+  color: #d9ded2;
+  font-size: 10px;
+  font-weight: 700;
+}
+.vocal-cast-row label {
+  display: grid;
+  gap: 5px;
+  color: #92968b;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.vocal-cast-row select {
+  min-width: 0;
+  border: 1px solid #3f4934;
+  border-radius: 7px;
+  padding: 8px;
+  background: #171b12;
+  color: #efefe9;
+  font-size: 11px;
+}
+.vocal-cast-invite {
+  border: 1px solid #738832;
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #20280e;
+  color: #d6f16e;
+  font-size: 10px;
+  font-weight: 700;
+}
+.permission-modal {
+  width: min(610px, 100%);
+}
+.permission-link-result {
+  display: grid;
+  gap: 12px;
+}
+.permission-link-result p {
+  margin: 0;
+  color: #c7cbc1;
+  line-height: 1.5;
+}
+.permission-link-result input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #555d48;
+  border-radius: 8px;
+  background: #0c0e0b;
+  color: #ebeee8;
+  font-size: 12px;
+}
 .advanced-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2381,6 +2485,89 @@ textarea:focus {
   font-size: 8px;
   letter-spacing: 0.13em;
 }
+.repair-form .inline-action {
+  appearance: none;
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #c8f644;
+  font: inherit;
+  letter-spacing: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.repair-form .inline-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.cover-advanced {
+  border: 1px solid #303b22;
+  border-radius: 9px;
+  background: #11150b;
+}
+.cover-advanced summary {
+  padding: 11px 12px;
+  color: #c7cbc1;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.cover-advanced > label,
+.cover-advanced > .vocal-cast {
+  margin: 0 12px 13px;
+}
+.cover-rights-notice {
+  margin: 0;
+  color: #8e9287;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.workspace-lyrics {
+  margin: 14px 0;
+  border: 1px solid #3e4b22;
+  border-radius: 10px;
+  background: #11150b;
+  color: #dfe3d8;
+}
+.workspace-lyrics summary {
+  padding: 12px 14px;
+  cursor: pointer;
+  color: #d8ef87;
+  font-size: 12px;
+  font-weight: 700;
+}
+.workspace-lyrics summary span {
+  margin-left: 9px;
+  color: #93988d;
+  font-size: 10px;
+  font-weight: 400;
+}
+.workspace-lyrics p {
+  margin: 0;
+  padding: 0 14px 14px;
+  color: #c7cbc1;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+.workspace-lyrics-action {
+  margin: 0 14px 14px;
+  border: 1px solid #738832;
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: #202d0b;
+  color: #d8ef87;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.workspace-lyrics-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.workspace-lyrics-error {
+  color: #f4a1a1 !important;
+}
 .repair-form input,
 .repair-form select {
   display: block;
@@ -2608,6 +2795,122 @@ textarea:focus {
   background: #321818;
   color: #ffd2d2;
 }
+.permission-page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 0%, #252d0f, #090a08 48%);
+  color: #f2f3ed;
+}
+.permission-card {
+  width: min(560px, 100%);
+  padding: clamp(24px, 6vw, 44px);
+  border: 1px solid #586b29;
+  border-radius: 20px;
+  background: #12140f;
+  box-shadow: 0 24px 100px rgb(0 0 0 / 45%);
+}
+.permission-kicker {
+  margin: 0 0 12px;
+  color: var(--lime);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+.permission-card h1 {
+  margin: 0;
+  font-family: Georgia, serif;
+  font-size: clamp(31px, 9vw, 47px);
+  line-height: 1;
+}
+.permission-lede {
+  margin: 20px 0;
+  color: #c5c8bf;
+  line-height: 1.6;
+}
+.permission-summary {
+  margin: 22px 0;
+  padding: 17px;
+  border: 1px solid #3c4830;
+  border-radius: 12px;
+  background: #171a13;
+}
+.permission-summary strong {
+  color: #dcf58a;
+}
+.permission-summary ul {
+  margin: 10px 0;
+  padding-left: 21px;
+  color: #d1d4cb;
+  line-height: 1.55;
+}
+.permission-summary small,
+.permission-note {
+  color: #9ea398;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.permission-card form {
+  display: grid;
+  gap: 15px;
+}
+.permission-card form > label:not(.permission-check) {
+  display: grid;
+  gap: 7px;
+  color: #c5c8bf;
+  font-size: 13px;
+  font-weight: 700;
+}
+.permission-card input[type="text"],
+.permission-card input:not([type]) {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid #4b5242;
+  border-radius: 10px;
+  background: #0d0f0b;
+  color: #fff;
+  font-size: 16px;
+}
+.permission-statement {
+  padding: 14px;
+  border-left: 3px solid var(--lime);
+  background: #0d0f0b;
+  color: #d0d3c9;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.permission-check {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: #e3e6dc;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.permission-check input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--lime);
+}
+.permission-card form button {
+  min-height: 52px;
+  border: 1px solid #91a83d;
+  border-radius: 10px;
+  background: #bdf83b;
+  color: #10120b;
+  font-size: 16px;
+  font-weight: 800;
+}
+.permission-card form button:disabled {
+  opacity: 0.48;
+}
+.permission-error {
+  color: #ffaaa4;
+  font-size: 13px;
+}
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 350px 1fr;
@@ -2632,6 +2935,9 @@ textarea:focus {
   }
 }
 @media (max-width: 720px) {
+  .vocal-cast-row {
+    grid-template-columns: 1fr;
+  }
   .app-shell {
     padding-left: 0;
     padding-bottom: 150px;

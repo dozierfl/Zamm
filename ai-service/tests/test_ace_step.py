@@ -15,10 +15,29 @@ def test_translator_maps_plan_lyrics_seed_and_instrumental():
     translator=AceStepRequestTranslator(AceStepSettings())
     payload=translator.translate(request());assert payload["bpm"]==74;assert payload["key_scale"]=="F# minor";assert payload["time_signature"]=="4";assert payload["seed"]==123;assert payload["use_random_seed"] is False;assert "Rhodes" in payload["prompt"];assert payload["lyrics"].startswith("[Verse]")
     assert translator.translate(request(False,""))["lyrics"]=="[instrumental]"
-def test_lego_translator_uses_base_model_and_context_instruction():
+def test_lego_translator_uses_xl_base_model_and_context_instruction():
     class Lego:targetInstrumentGroup="bass";caption="warm neo-soul";seed=8401;providerOptions={}
     payload=AceStepRequestTranslator(AceStepSettings()).translate_lego(Lego())
-    assert payload["task_type"]=="lego";assert payload["model"]=="acestep-v15-base";assert payload["track_name"]=="bass";assert payload["instruction"]=="Generate the BASS track based on the audio context:";assert payload["thinking"] is False;assert payload["seed"]==8401
+    assert payload["task_type"]=="lego";assert payload["model"]=="acestep-v15-xl-base";assert payload["track_name"]=="bass";assert payload["instruction"]=="Generate the BASS track based on the audio context:";assert payload["thinking"] is False;assert payload["seed"]==8401
+
+@pytest.mark.anyio
+async def test_cover_transport_uses_trained_instruction_and_source_audio():
+    async def handler(req):
+        if req.url.path == "/release_task":
+            body = (await req.aread()).decode("latin1")
+            assert "Generate audio semantic tokens based on the given conditions:" in body
+            assert "custom instruction" not in body
+            assert 'name="src_audio"' in body
+            return httpx.Response(200, json=wrapped({"task_id": "t"}))
+        if req.url.path == "/query_result":
+            return httpx.Response(200, json=wrapped([{"task_id": "t", "status": 1, "result": json.dumps([{"file": "/v1/audio?path=x.wav"}])}]))
+        return httpx.Response(200, content=wav_data())
+    client = AceStepClient(AceStepSettings(poll_interval_seconds=0), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    payload = {"task_type": "cover", "instruction": "custom instruction"}
+    await client.generate(payload, wav_data())
+    assert payload["instruction"] == "custom instruction"
+    with pytest.raises(AceStepError, match="COVER_SOURCE_AUDIO_MISSING"):
+        await client.generate(payload)
 @pytest.mark.anyio
 async def test_async_success_and_audio_metadata():
     calls=0

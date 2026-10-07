@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from app.vocal_analysis import analyze_vocal, verify_identity_phrase
+from app.vocal_analysis import analyze_vocal, transcribe_song_lyrics, verify_identity_phrase
 
 
 def vocal_wav(seconds: int = 20) -> bytes:
@@ -69,3 +69,19 @@ def test_fresh_identity_phrase_requires_local_transcript_match(monkeypatch):
     assert result["passed"] is True
     assert result["phraseSimilarity"] == 1
     assert result["reasons"] == []
+
+
+def test_song_lyrics_transcription_returns_an_editable_draft(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_whisper",
+        SimpleNamespace(
+            transcribe=lambda *_args, **_kwargs: {"text": "Hold on to the light."}
+        ),
+    )
+    result = transcribe_song_lyrics(vocal_wav())
+    assert result == {
+        "lyrics": "Hold on to the light.",
+        "language": "en",
+        "status": "DRAFT",
+    }

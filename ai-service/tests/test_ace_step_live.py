@@ -45,7 +45,7 @@ def test_real_ace_step_generation_through_gateway():
         response.raise_for_status()
         result = response.json()
         assert result["provider"] == "ace-step-1.5"
-        assert result["model"] == "acestep-v15-turbo"
+        assert result["model"] == "acestep-v15-xl-base"
         assert result["assets"][0]["role"] == "MASTER"
         audio = client.get(result["assets"][0]["audio"]["sourceUrl"])
         audio.raise_for_status()

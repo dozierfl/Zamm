@@ -25,6 +25,7 @@ test("Worker routes pass the PostgreSQL binding through authentication", async (
     "auth/login",
     "auth/logout",
     "auth/session",
+    "covers",
     "generations",
     "generations/[id]",
     "audio/[id]",
@@ -917,6 +918,64 @@ test("Eleven Music sends a master-only v2 request and normalizes binary audio", 
     globalThis.fetch = original;
   }
 });
+test("Eleven Music uploads an owned source and conditions a new cover arrangement", async () => {
+  const original = globalThis.fetch,
+    plan = compose({
+      prompt: "polished neo-soul cover production",
+      durationSeconds: 12,
+      outputMode: "MASTER_ONLY" as const,
+      lyrics: "[Verse]\nI will sing this again",
+      instrumental: false,
+    });
+  const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (String(url).endsWith("/v1/music/upload")) return Response.json({ song_id: "private-source" });
+    return new Response(new Uint8Array([0x49, 0x44, 0x33]), {
+      headers: { "content-type": "audio/mpeg" },
+    });
+  };
+  try {
+    const result = await new ElevenLabsMusicProvider("secret-key", "music_v2").generateCover!(
+      { jobId: "j", userId: "u", songId: "s", versionId: "v", compositionPlan: plan, lyrics: "[Verse]\nI will sing this again", seed: 42, outputMode: "MASTER_ONLY" },
+      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH" },
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(String(calls[0].url), "https://api.elevenlabs.io/v1/music/upload");
+    assert.equal(String(calls[1].url), "https://api.elevenlabs.io/v1/music?output_format=mp3_48000_192");
+    const body = JSON.parse(String(calls[1].init?.body));
+    assert.equal(body.model_id, "music_v2");
+    assert.equal(body.composition_plan.chunks[0].conditioning_ref.song_id, "private-source");
+    assert.equal(body.composition_plan.chunks[0].conditioning_ref.range.end_ms, 30000);
+    assert.equal(result.assets[0].sourceAssetId, "asset-1");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("ACE-Step keeps a private source inside the local gateway for a cover arrangement", async () => {
+  const original = globalThis.fetch,
+    plan = compose({ prompt: "full-band neo-soul refresh", durationSeconds: 12, outputMode: "MASTER_ONLY" as const, lyrics: "", instrumental: false }),
+    calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (String(url) === "http://gateway/v1/ace-step-cover") return Response.json({ assets: [{ assetKey: "cover-master", role: "MASTER", provenance: "GENERATED_NATIVE", isPrimary: true, sortOrder: 0, audio: { sourceUrl: "http://gateway/v1/ace-assets/private-cover" }, metadata: { mimeType: "audio/wav", codec: "pcm_s16le", sampleRate: 48000, bitDepth: 16, channels: 2, durationSeconds: 12, checksum: "test", waveformData: [] }, providerMetadata: { generationMethod: "ACE_STEP_COVER" } }] });
+    return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "audio/wav" } });
+  };
+  try {
+    const result = await new AceStepMusicProvider("http://gateway").generateCover!(
+      { jobId: "j", userId: "u", songId: "s", versionId: "v", compositionPlan: plan, lyrics: "", seed: 42, outputMode: "MASTER_ONLY" },
+      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH" },
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(String(calls[0].url), "http://gateway/v1/ace-step-cover");
+    const body = JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.arrangement, "REFRESH");
+    assert.equal(body.sourceAssetId, "asset-1");
+    assert.deepEqual(result.assets[0].audio.bytes, new Uint8Array([82, 73, 70, 70]));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 test("Eleven Music normalizes copyrighted prompt rejection without exposing provider details", async () => {
   const original = globalThis.fetch,
     input = {
@@ -1075,4 +1134,52 @@ test("Lego results normalize to contextual native tracks", async () => {
   } finally {
     globalThis.fetch = original;
   }
+});
+test("vocal cast assigns private voices by lyric section without weakening profile checks", async () => {
+  const first = crypto.randomUUID(), second = crypto.randomUUID();
+  const parsed = createGenerationSchema.parse({
+    prompt: "warm R&B duet with a conversational vocal exchange",
+    lyrics: "[Verse 1]\nHello\n\n[Chorus]\nTogether",
+    vocalCast: [
+      { section: "Verse 1", role: "LEAD", profileIds: [first] },
+      { section: "Chorus", role: "DUET", profileIds: [first, second] },
+    ],
+  });
+  assert.equal(parsed.vocalCast.length, 2);
+  assert.throws(
+    () =>
+      createGenerationSchema.parse({
+        prompt: "warm R&B duet with a conversational vocal exchange",
+        vocalCast: [{ section: "Chorus", role: "DUET", profileIds: [first] }],
+      }),
+    /A duet needs two private vocalists/,
+  );
+  const [studio, generationRoute, coverRoute] = await Promise.all([
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/generations/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/covers/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(studio, /Who sings each section\?/);
+  assert.match(studio, /vocalCast: cleanVocalCast/);
+  assert.match(generationRoute, /validateVocalCast/);
+  assert.match(coverRoute, /castProfileIds/);
+});
+test("remote vocalist permission uses a private expiring link with no recipient account", async () => {
+  const [schema, migration, ownerRoute, publicRoute, page, studio] = await Promise.all([
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle-pg/0008_vocalist_permission_links.sql", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vocalist-permissions/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/vocalist-permissions/[token]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/consent/vocalist-permission-page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(schema, /vocalistPermissions/);
+  assert.match(migration, /CREATE TABLE "vocalist_permissions"/);
+  assert.match(migration, /vocalist_permissions_token_hash_unique/);
+  assert.match(ownerRoute, /randomToken\(\)/);
+  assert.match(ownerRoute, /tokenHash/);
+  assert.match(publicRoute, /signedName/);
+  assert.doesNotMatch(publicRoute, /requireUser/);
+  assert.match(page, /No account or password is required/);
+  assert.match(studio, /Create phone permission link/);
 });

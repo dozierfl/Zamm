@@ -6,9 +6,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from .ace_step import AceStepClient, AceStepError, AceStepRequestTranslator, AceStepSettings
 from .artist_vocal import render_artist_vocal, resolve_rvc_artifact
+from .compute import compute_capabilities, local_compute_scheduler, resolve_compute_target
+from .hardware_profiler import hardware_profile
+from .coreml_classifier import classifier_status
 from .minimax import MiniMaxClient, MiniMaxError, MiniMaxRequestTranslator, MiniMaxSettings
 from .phrase_repair import render_phrase_repair
-from .vocal_analysis import analyze_vocal, verify_identity_phrase
+from .vocal_analysis import analyze_vocal, transcribe_song_lyrics, verify_identity_phrase
 
 Role=Literal["MASTER","PREMASTER","NATIVE_TRACK","DERIVED_STEM","EFFECT_RETURN","ALTERNATIVE","REFERENCE","UPLOAD"]
 Provenance=Literal["GENERATED_NATIVE","SEPARATED","RENDERED","UPLOADED","REFERENCE","DERIVED"]
@@ -18,6 +21,8 @@ class Plan(BaseModel):
     titleSuggestions:list[str]=[];genre:str="";subgenres:list[str]=[];mood:list[str]=[];bpm:int=Field(ge=40,le=220);key:str="";scale:str="";timeSignature:str="4/4";durationSeconds:int=Field(ge=1,le=600);instrumentation:list[Instrument]=[];vocal:Vocal=Vocal(enabled=False);structure:list[dict[str,Any]]=[];generationCaption:str="";negativeInstructions:list[str]=[]
 class Request(BaseModel):
     jobId:str;userId:str;songId:str;versionId:str;compositionPlan:Plan;lyrics:str="";seed:int=Field(ge=0);outputMode:Literal["MASTER_ONLY","MULTI_ASSET"]="MASTER_ONLY";providerOptions:dict[str,Any]={}
+class CoverRequest(Request):
+    sourceAssetId:str;sourceTitle:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str;arrangement:Literal["REFRESH","NEW"]="REFRESH";sourceAdherence:int=Field(default=82,ge=0,le=100);styleInfluence:int=Field(default=55,ge=0,le=100)
 LEGO_TARGETS={"woodwinds","brass","fx","synth","strings","percussion","keyboard","guitar","bass","drums","backing_vocals","vocals"}
 class LegoRequest(BaseModel):
     jobId:str;userId:str;songId:str;versionId:str;sourceAssetId:str;targetInstrumentGroup:str;seed:int=Field(ge=0);caption:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str;providerOptions:dict[str,Any]={}
@@ -32,7 +37,7 @@ class IdentityVerificationRequest(VocalAnalysisRequest):expectedPhrase:str
 class PhraseRepairRequest(BaseModel):
     sourceAudioBase64:str;replacementAudioBase64:str;startSeconds:float=Field(ge=0);endSeconds:float=Field(gt=0);crossfadeMs:int=Field(default=80,ge=0,le=500)
 class ArtistVocalRequest(BaseModel):
-    jobId:str;profileId:str;profileVersionId:str;modelRef:str;indexRef:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str
+    jobId:str;profileId:str;profileVersionId:str;modelRef:str;indexRef:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str;voiceIdentityStrength:float=Field(default=100,ge=0,le=100)
 
 SEPARATOR_STEMS=("vocals","drums","bass","guitar","piano","other")
 separation_jobs:dict[str,dict[str,Any]]={}
@@ -41,11 +46,12 @@ separation_asset_tokens:dict[str,list[str]]={}
 
 def separator_config():
     projects=Path(os.getenv("DOZI_PROJECTS_DIR","/Users/F.D/Projects"))
+    compute=resolve_compute_target("stem_separation",os.getenv("BS_ROFORMER_DEVICE") or None)
     return {
         "binary":Path(os.getenv("BS_ROFORMER_BIN",str(projects/".tools/bs-roformer-venv/bin/bs-roformer-infer"))),
         "models":Path(os.getenv("BS_ROFORMER_MODELS_DIR",str(projects/".tools/bs-roformer-models"))),
         "model":os.getenv("BS_ROFORMER_MODEL","roformer-model-bs-roformer-sw-by-jarredou"),
-        "device":os.getenv("BS_ROFORMER_DEVICE","mps"),
+        "device":compute.subprocess_device,"compute":compute,
     }
 
 def separator_available():
@@ -54,7 +60,7 @@ def separator_available():
 
 def rvc_config():
     root=Path(os.getenv("DOZI_RVC_ROOT","/Users/F.D/Projects/RVC-Dozi")).expanduser().resolve()
-    return {"root":root,"python":Path(os.getenv("DOZI_RVC_PYTHON",str(root/".venv/bin/python"))),"cli":Path(os.getenv("DOZI_RVC_CLI",str(root/"infer/cli.py")))}
+    return {"root":root,"python":Path(os.getenv("DOZI_RVC_PYTHON",str(root/".venv/bin/python"))),"cli":Path(os.getenv("DOZI_RVC_CLI",str(root/"infer/cli.py"))),"compute":resolve_compute_target("voice_conversion")}
 
 def vocal_identity_available():
     cfg=rvc_config()
@@ -150,7 +156,7 @@ def run_separation(job_id:str,audio:bytes,mime_type:str):
                     "instrumentGroup":"VOCALS" if stem=="vocals" else "DRUMS" if stem=="drums" else "MUSIC",
                     "provenance":"SEPARATED","isPrimary":False,"sortOrder":index,
                     "audio":{"sourceUrl":f"{os.getenv('AI_SERVICE_PUBLIC_BASE_URL','http://127.0.0.1:8000')}/v1/separation-assets/{token}"},
-                    "metadata":metadata,"providerMetadata":{"generationMethod":"SEPARATION","separator":cfg["model"],"editingAid":True},
+                    "metadata":metadata,"providerMetadata":{"generationMethod":"SEPARATION","separator":cfg["model"],"compute":cfg["compute"].metadata(),"editingAid":True},
                 })
             if len(assets)<4:raise RuntimeError("SEPARATION_INCOMPLETE_RESULT")
             separation_asset_tokens[job_id]=tokens
@@ -160,8 +166,24 @@ def run_separation(job_id:str,audio:bytes,mime_type:str):
         logger.exception("Stem separation failed")
         state.update(status="FAILED",progress=0,message="Stem separation could not finish",errorCode=str(exc))
 
-def settings():return AceStepSettings(base_url=os.getenv("ACESTEP_BASE_URL","http://127.0.0.1:8001"),api_key=os.getenv("ACESTEP_API_KEY") or None,model=os.getenv("ACESTEP_MODEL","acestep-v15-turbo"),timeout_seconds=float(os.getenv("ACESTEP_TIMEOUT_SECONDS","900")),poll_interval_seconds=float(os.getenv("ACESTEP_POLL_INTERVAL_MS","2000"))/1000,thinking=os.getenv("ACESTEP_THINKING","false").lower()=="true",inference_steps=int(os.getenv("ACESTEP_INFERENCE_STEPS","8")))
+def settings():return AceStepSettings(base_url=os.getenv("ACESTEP_BASE_URL","http://127.0.0.1:8001"),api_key=os.getenv("ACESTEP_API_KEY") or None,model=os.getenv("ACESTEP_MODEL","acestep-v15-xl-base"),timeout_seconds=float(os.getenv("ACESTEP_TIMEOUT_SECONDS","900")),poll_interval_seconds=float(os.getenv("ACESTEP_POLL_INTERVAL_MS","2000"))/1000,thinking=os.getenv("ACESTEP_THINKING","false").lower()=="true",inference_steps=int(os.getenv("ACESTEP_INFERENCE_STEPS","50")))
 def minimax_settings():return MiniMaxSettings(base_url=os.getenv("MINIMAX_BASE_URL","http://127.0.0.1:8002"),model=os.getenv("MINIMAX_MODEL","MiniMax-Music3-mxfp8"),timeout_seconds=float(os.getenv("MINIMAX_TIMEOUT_SECONDS","1800")),steps=int(os.getenv("MINIMAX_STEPS","30")))
+
+async def generate_with_ace_step(cfg:AceStepSettings,payload:dict[str,Any],job_id:str,source:bytes|None=None,source_mime_type:str="audio/wav"):
+    async with local_compute_scheduler.reserve("music_generation",job_id) as target:
+        outputs=await AceStepClient(cfg).generate(payload,source,source_mime_type)
+    return outputs,target.metadata()
+
+async def generate_with_minimax(cfg:MiniMaxSettings,payload:dict[str,Any],job_id:str):
+    async with local_compute_scheduler.reserve("music_generation",job_id) as target:
+        item=await MiniMaxClient(cfg).generate(payload)
+    return item,target.metadata()
+
+async def run_scheduled_separation(job_id:str,audio:bytes,mime_type:str):
+    state=separation_jobs[job_id]
+    state.update(status="QUEUED",progress=10,message="Waiting for the local Apple GPU")
+    async with local_compute_scheduler.reserve("stem_separation",job_id):
+        await asyncio.to_thread(run_separation,job_id,audio,mime_type)
 app=FastAPI(title="Dozi AI Service",version="0.2.0")
 logger=logging.getLogger("dozi.ai")
 ace_assets:dict[str,tuple[bytes,str]]={}
@@ -177,6 +199,14 @@ def vocal_analysis(request:VocalAnalysisRequest,authorization:str|None=Header(de
 async def vocal_analysis_audio(request:HttpRequest,authorization:str|None=Header(default=None),x_minimum_usable_seconds:float=Header(default=15)):
     authorize(authorization)
     try:return analyze_vocal(await request.body(),max(1,min(30,x_minimum_usable_seconds)))
+    except ValueError as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
+@app.post("/v1/lyrics-transcription-audio")
+async def lyrics_transcription_audio(request:HttpRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    data=await request.body()
+    if len(data)<512 or len(data)>120*1024*1024:
+        raise HTTPException(422,detail={"code":"INVALID_LYRICS_AUDIO","retryable":False})
+    try:return await asyncio.to_thread(transcribe_song_lyrics,data)
     except ValueError as exc:raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
 @app.post("/v1/identity-verification")
 def identity_verification(request:IdentityVerificationRequest,authorization:str|None=Header(default=None)):
@@ -203,7 +233,8 @@ async def artist_vocal_conversion(request:ArtistVocalRequest,authorization:str|N
     try:
         model=resolve_rvc_artifact(request.modelRef,rvc["root"],".pth")
         index=resolve_rvc_artifact(request.indexRef,rvc["root"],".index")
-        rendered=await asyncio.to_thread(render_artist_vocal,source,model_path=model,index_path=index,rvc_root=rvc["root"],separator_binary=separator["binary"],separator_models=separator["models"],separator_model=separator["model"],separator_device=separator["device"])
+        async with local_compute_scheduler.reserve("voice_conversion",request.jobId) as target:
+            rendered=await asyncio.to_thread(render_artist_vocal,source,model_path=model,index_path=index,rvc_root=rvc["root"],separator_binary=separator["binary"],separator_models=separator["models"],separator_model=separator["model"],separator_device=separator["device"],voice_identity_strength=request.voiceIdentityStrength,compute_environment=rvc["compute"].environment(),compute_metadata=target.metadata())
     except ValueError as exc:
         raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
     except subprocess.TimeoutExpired:
@@ -211,7 +242,7 @@ async def artist_vocal_conversion(request:ArtistVocalRequest,authorization:str|N
     except RuntimeError as exc:
         retryable=str(exc) in {"VOCAL_IDENTITY_PROCESSOR_UNAVAILABLE","VOCAL_IDENTITY_SEPARATION_FAILED","VOCAL_IDENTITY_CONVERSION_FAILED"}
         raise HTTPException(503 if retryable else 422,detail={"code":str(exc),"retryable":retryable}) from None
-    elapsed=round(time.monotonic()-started,3);processing={**rendered["processing"],"elapsedSeconds":elapsed,"profileVersionId":request.profileVersionId}
+    elapsed=round(time.monotonic()-started,3);processing={**rendered["processing"],"elapsedSeconds":elapsed,"profileVersionId":request.profileVersionId,"voiceIdentityStrength":request.voiceIdentityStrength}
     master=rendered["master"];vocal=rendered["vocal"]
     return Result(assets=[
         Asset(assetKey="artist-voice-master",role="MASTER",provenance="RENDERED",isPrimary=True,sortOrder=0,audio=Audio(base64=base64.b64encode(master["bytes"]).decode()),metadata=Metadata(**master["metadata"]),providerMetadata={"generationMethod":"VOCAL_IDENTITY_CONVERSION",**processing}),
@@ -224,7 +255,7 @@ async def stem_separation(request:HttpRequest,authorization:str|None=Header(defa
     audio=await request.body()
     if len(audio)<512 or len(audio)>120*1024*1024:raise HTTPException(422,detail={"code":"INVALID_SEPARATION_AUDIO","retryable":False})
     job_id=uuid.uuid4().hex;separation_jobs[job_id]={"jobId":job_id,"status":"QUEUED","progress":8,"message":"Separation queued","assets":[]}
-    task=asyncio.create_task(asyncio.to_thread(run_separation,job_id,audio,x_audio_mime_type));separation_tasks.add(task);task.add_done_callback(separation_tasks.discard)
+    task=asyncio.create_task(run_scheduled_separation(job_id,audio,x_audio_mime_type));separation_tasks.add(task);task.add_done_callback(separation_tasks.discard)
     return separation_jobs[job_id]
 @app.get("/v1/stem-separation/{job_id}")
 def stem_separation_status(job_id:str,authorization:str|None=Header(default=None)):
@@ -243,30 +274,48 @@ def wav_bytes(seed:int,duration:int,bpm:int):
     with wave.open(out,"wb") as wav:wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(rate);wav.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*(110+(seed%12)*7)*i/rate))) for i in range(rate*duration)))
     return out.getvalue(),[0.1526]*96
 @app.get("/health")
-async def health():return{"status":"ready","gatewayAvailable":True,"stemSeparation":{"available":separator_available(),"engine":"bs-roformer"},"vocalIdentity":{"available":vocal_identity_available(),"engine":"rvc-v2"},"aceStep":await AceStepClient(settings()).health(),"minimax":await MiniMaxClient(minimax_settings()).health()}
+async def health():return{"status":"ready","gatewayAvailable":True,"compute":{**compute_capabilities(),"scheduler":local_compute_scheduler.status(),"hardware":hardware_profile(),"audioClassification":classifier_status()},"stemSeparation":{"available":separator_available(),"engine":"bs-roformer","target":separator_config()["compute"].metadata()},"vocalIdentity":{"available":vocal_identity_available(),"engine":"rvc-v2","target":rvc_config()["compute"].metadata()},"aceStep":await AceStepClient(settings()).health(),"minimax":await MiniMaxClient(minimax_settings()).health()}
+@app.get("/v1/compute")
+async def compute():return{**compute_capabilities(),"scheduler":local_compute_scheduler.status(),"hardware":hardware_profile(),"audioClassification":classifier_status()}
 @app.get("/capabilities")
 async def capabilities(authorization:str|None=Header(default=None)):
-    authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"supported-not-integrated","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"DEVELOPMENT" if separator_available() else "UNAVAILABLE","aceStep":state}
+    authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"integrated-for-owned-songs","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"DEVELOPMENT" if separator_available() else "UNAVAILABLE","aceStep":state}
 @app.post("/v1/ace-step-generation",response_model=Result)
 async def ace_generate(request:Request,authorization:str|None=Header(default=None)):
     authorize(authorization);cfg=settings();payload=AceStepRequestTranslator(cfg).translate(request);started=time.monotonic();logger.info(json.dumps({"event":"ace_step_started","jobId":request.jobId,"provider":"ace-step-1.5","model":payload["model"]}))
-    try:outputs=await AceStepClient(cfg).generate(payload)
+    try:outputs,compute_target=await generate_with_ace_step(cfg,payload,request.jobId)
     except AceStepError as exc:logger.warning(json.dumps({"event":"ace_step_failed","jobId":request.jobId,"code":exc.code,"retryable":exc.retryable,"elapsedSeconds":round(time.monotonic()-started,3)}));raise HTTPException(503 if exc.retryable else 422,detail={"code":exc.code,"retryable":exc.retryable}) from None
     assets=[]
     public_base=os.getenv("AI_SERVICE_PUBLIC_BASE_URL","http://127.0.0.1:8000")
     for index,item in enumerate(outputs):
-        asset_token=hashlib.sha256(f"{request.jobId}:{index}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);assets.append(Asset(assetKey="master" if index==0 else f"alternative-{index}",role="MASTER" if index==0 else "ALTERNATIVE",provenance="GENERATED_NATIVE",isPrimary=index==0,sortOrder=index,audio=Audio(sourceUrl=f"{public_base}/v1/ace-assets/{asset_token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=item.provider_metadata))
-    logger.info(json.dumps({"event":"ace_step_completed","jobId":request.jobId,"taskId":assets[0].providerMetadata.get("aceStepTaskId"),"resultCount":len(assets),"elapsedSeconds":round(time.monotonic()-started,3)}));return Result(assets=assets,providerMetadata={"provider":"ace-step-1.5","model":payload["model"],"requestedSeed":request.seed,"taskId":assets[0].providerMetadata.get("aceStepTaskId")})
+        asset_token=hashlib.sha256(f"{request.jobId}:{index}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);assets.append(Asset(assetKey="master" if index==0 else f"alternative-{index}",role="MASTER" if index==0 else "ALTERNATIVE",provenance="GENERATED_NATIVE",isPrimary=index==0,sortOrder=index,audio=Audio(sourceUrl=f"{public_base}/v1/ace-assets/{asset_token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata={**item.provider_metadata,"compute":compute_target}))
+    logger.info(json.dumps({"event":"ace_step_completed","jobId":request.jobId,"taskId":assets[0].providerMetadata.get("aceStepTaskId"),"resultCount":len(assets),"compute":compute_target,"elapsedSeconds":round(time.monotonic()-started,3)}));return Result(assets=assets,providerMetadata={"provider":"ace-step-1.5","model":payload["model"],"requestedSeed":request.seed,"taskId":assets[0].providerMetadata.get("aceStepTaskId"),"compute":compute_target})
+@app.post("/v1/ace-step-cover",response_model=Result)
+async def ace_cover(request:CoverRequest,authorization:str|None=Header(default=None)):
+    authorize(authorization)
+    try:source=base64.b64decode(request.sourceAudioBase64,validate=True)
+    except (ValueError,base64.binascii.Error):raise HTTPException(422,detail={"code":"COVER_SOURCE_AUDIO_MISSING","retryable":False}) from None
+    if len(source)<512 or len(source)>120*1024*1024:raise HTTPException(422,detail={"code":"COVER_SOURCE_AUDIO_MISSING","retryable":False})
+    cfg=settings();payload=AceStepRequestTranslator(cfg).translate_cover(request);started=time.monotonic()
+    logger.info(json.dumps({"event":"ace_step_cover_started","jobId":request.jobId,"sourceAssetId":request.sourceAssetId,"arrangement":request.arrangement,"sourceAdherence":request.sourceAdherence,"styleInfluence":request.styleInfluence,"model":payload["model"]}))
+    try:outputs,compute_target=await generate_with_ace_step(cfg,payload,request.jobId,source,request.sourceMimeType)
+    except AceStepError as exc:raise HTTPException(503 if exc.retryable else 422,detail={"code":exc.code,"retryable":exc.retryable}) from None
+    assets=[];public_base=os.getenv("AI_SERVICE_PUBLIC_BASE_URL","http://127.0.0.1:8000");elapsed=round(time.monotonic()-started,3)
+    for index,item in enumerate(outputs):
+        token=hashlib.sha256(f"{request.jobId}:cover:{index}:{item.checksum}".encode()).hexdigest();ace_assets[token]=(item.data,item.mime_type)
+        metadata={**item.provider_metadata,"generationMethod":"ACE_STEP_COVER","sourceAssetId":request.sourceAssetId,"sourceTitle":request.sourceTitle,"arrangement":request.arrangement,"sourceAdherence":request.sourceAdherence,"styleInfluence":request.styleInfluence,"audioCoverStrength":payload["audio_cover_strength"],"compute":compute_target,"elapsedSeconds":elapsed}
+        assets.append(Asset(assetKey="cover-master" if index==0 else f"cover-alternative-{index}",role="MASTER" if index==0 else "ALTERNATIVE",provenance="GENERATED_NATIVE",isPrimary=index==0,sortOrder=index,audio=Audio(sourceUrl=f"{public_base}/v1/ace-assets/{token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=metadata))
+    return Result(assets=assets,providerMetadata={"provider":"ace-step-1.5","model":payload["model"],"requestedSeed":request.seed,"taskId":assets[0].providerMetadata.get("aceStepTaskId"),"generationMethod":"ACE_STEP_COVER","sourceAssetId":request.sourceAssetId,"arrangement":request.arrangement,"sourceAdherence":request.sourceAdherence,"styleInfluence":request.styleInfluence,"compute":compute_target,"elapsedSeconds":elapsed})
 @app.post("/v1/minimax-generation",response_model=Result)
 async def minimax_generate(request:Request,authorization:str|None=Header(default=None)):
     authorize(authorization)
     if request.outputMode!="MASTER_ONLY":raise HTTPException(422,detail={"code":"PROVIDER_OUTPUT_MODE_UNSUPPORTED","retryable":False})
     cfg=minimax_settings();payload=MiniMaxRequestTranslator(cfg).translate(request);started=time.monotonic();logger.info(json.dumps({"event":"minimax_started","jobId":request.jobId,"provider":"minimax-music3-mlx","model":cfg.model}))
-    try:item=await MiniMaxClient(cfg).generate(payload)
+    try:item,compute_target=await generate_with_minimax(cfg,payload,request.jobId)
     except MiniMaxError as exc:logger.warning(json.dumps({"event":"minimax_failed","jobId":request.jobId,"code":exc.code,"retryable":exc.retryable,"elapsedSeconds":round(time.monotonic()-started,3)}));raise HTTPException(503 if exc.retryable else 422,detail={"code":exc.code,"retryable":exc.retryable}) from None
-    asset_token=hashlib.sha256(f"{request.jobId}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);public_base=os.getenv("AI_SERVICE_PUBLIC_BASE_URL","http://127.0.0.1:8000");elapsed=round(time.monotonic()-started,3);metadata={**item.provider_metadata,"generationMethod":"FULL_SONG","elapsedSeconds":elapsed}
+    asset_token=hashlib.sha256(f"{request.jobId}:{item.checksum}".encode()).hexdigest();ace_assets[asset_token]=(item.data,item.mime_type);public_base=os.getenv("AI_SERVICE_PUBLIC_BASE_URL","http://127.0.0.1:8000");elapsed=round(time.monotonic()-started,3);metadata={**item.provider_metadata,"generationMethod":"FULL_SONG","compute":compute_target,"elapsedSeconds":elapsed}
     asset=Asset(assetKey="master",role="MASTER",provenance="GENERATED_NATIVE",isPrimary=True,sortOrder=0,audio=Audio(sourceUrl=f"{public_base}/v1/generated-assets/{asset_token}"),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=metadata)
-    logger.info(json.dumps({"event":"minimax_completed","jobId":request.jobId,"elapsedSeconds":elapsed}));return Result(assets=[asset],providerMetadata={"provider":"minimax-music3-mlx","model":cfg.model,"requestedSeed":request.seed,"elapsedSeconds":elapsed})
+    logger.info(json.dumps({"event":"minimax_completed","jobId":request.jobId,"compute":compute_target,"elapsedSeconds":elapsed}));return Result(assets=[asset],providerMetadata={"provider":"minimax-music3-mlx","model":cfg.model,"requestedSeed":request.seed,"compute":compute_target,"elapsedSeconds":elapsed})
 @app.post("/v1/ace-step-lego",response_model=Result)
 async def ace_lego(request:LegoRequest,authorization:str|None=Header(default=None)):
     authorize(authorization)
@@ -274,10 +323,10 @@ async def ace_lego(request:LegoRequest,authorization:str|None=Header(default=Non
     try:source=base64.b64decode(request.sourceAudioBase64,validate=True)
     except (ValueError,base64.binascii.Error):raise HTTPException(422,detail={"code":"INVALID_SOURCE_AUDIO","retryable":False}) from None
     cfg=settings();payload=AceStepRequestTranslator(cfg).translate_lego(request);started=time.monotonic()
-    try:outputs=await AceStepClient(cfg).generate(payload,source,request.sourceMimeType)
+    try:outputs,compute_target=await generate_with_ace_step(cfg,payload,request.jobId,source,request.sourceMimeType)
     except AceStepError as exc:raise HTTPException(503 if exc.retryable else 422,detail={"code":exc.code,"retryable":exc.retryable}) from None
     if len(outputs)!=1:raise HTTPException(422,detail={"code":"GENERATION_INVALID_RESULT","retryable":False})
-    item=outputs[0];target=request.targetInstrumentGroup;metadata={**item.provider_metadata,"sourceAssetId":request.sourceAssetId,"generationMethod":"LEGO_CONTEXTUAL","targetInstrumentGroup":target,"elapsedSeconds":round(time.monotonic()-started,3)}
+    item=outputs[0];target=request.targetInstrumentGroup;metadata={**item.provider_metadata,"sourceAssetId":request.sourceAssetId,"generationMethod":"LEGO_CONTEXTUAL","targetInstrumentGroup":target,"compute":compute_target,"elapsedSeconds":round(time.monotonic()-started,3)}
     asset=Asset(assetKey=f"lego-{target}",role="NATIVE_TRACK",instrument=target,instrumentGroup=target,provenance="GENERATED_NATIVE",isPrimary=False,sortOrder=0,audio=Audio(base64=base64.b64encode(item.data).decode()),metadata=Metadata(mimeType=item.mime_type,codec=item.codec,sampleRate=item.sample_rate,bitDepth=item.bit_depth,channels=item.channels,durationSeconds=item.duration_seconds,checksum=item.checksum,waveformData=item.waveform),providerMetadata=metadata)
     return Result(assets=[asset],providerMetadata={"provider":"ace-step-1.5","model":payload["model"],"requestedSeed":request.seed,"taskId":item.provider_metadata.get("aceStepTaskId"),"generationMethod":"LEGO_CONTEXTUAL","sourceAssetId":request.sourceAssetId})
 @app.get("/v1/ace-assets/{asset_token}")

@@ -8,7 +8,7 @@ class AceStepError(Exception):
     def __init__(self,code:str,retryable:bool=False): super().__init__(code);self.code=code;self.retryable=retryable
 
 class AceStepSettings(BaseModel):
-    base_url:str="http://127.0.0.1:8001";api_key:str|None=None;model:str="acestep-v15-turbo";timeout_seconds:float=900;poll_interval_seconds:float=2;thinking:bool=False;inference_steps:int=8
+    base_url:str="http://127.0.0.1:8001";api_key:str|None=None;model:str="acestep-v15-xl-base";timeout_seconds:float=900;poll_interval_seconds:float=2;thinking:bool=False;inference_steps:int=50
 
 class AceStepRequestTranslator:
     def __init__(self,settings:AceStepSettings):self.settings=settings
@@ -24,7 +24,10 @@ class AceStepRequestTranslator:
         return{"prompt":caption,"lyrics":lyrics,"task_type":"text2music","model":options.get("model",self.settings.model),"thinking":bool(options.get("thinking",self.settings.thinking)),"audio_format":"wav","bpm":plan.bpm,"key_scale":f"{plan.key} {plan.scale}","time_signature":plan.timeSignature.split("/")[0],"audio_duration":max(10,plan.durationSeconds),"use_random_seed":False,"seed":request.seed,"batch_size":batch,"inference_steps":int(options.get("inferenceSteps",self.settings.inference_steps)),"use_cot_caption":False,"use_cot_language":False}
     def translate_lego(self,request:Any)->dict[str,Any]:
         options=request.providerOptions or {};target=request.targetInstrumentGroup
-        return{"prompt":request.caption,"global_caption":request.caption,"lyrics":"[instrumental]","task_type":"lego","track_name":target,"instruction":f"Generate the {target.upper()} track based on the audio context:","model":options.get("model","acestep-v15-base"),"thinking":False,"audio_format":"wav","use_random_seed":False,"seed":request.seed,"batch_size":1,"inference_steps":int(options.get("inferenceSteps",8)),"guidance_scale":float(options.get("guidanceScale",7.0)),"shift":float(options.get("shift",3.0)),"repainting_start":0.0,"repainting_end":-1,"use_cot_caption":False,"use_cot_language":False}
+        return{"prompt":request.caption,"global_caption":request.caption,"lyrics":"[instrumental]","task_type":"lego","track_name":target,"instruction":f"Generate the {target.upper()} track based on the audio context:","model":options.get("model","acestep-v15-xl-base"),"thinking":False,"audio_format":"wav","use_random_seed":False,"seed":request.seed,"batch_size":1,"inference_steps":int(options.get("inferenceSteps",50)),"guidance_scale":float(options.get("guidanceScale",7.0)),"shift":float(options.get("shift",3.0)),"repainting_start":0.0,"repainting_end":-1,"use_cot_caption":False,"use_cot_language":False}
+    def translate_cover(self,request:Any)->dict[str,Any]:
+        plan=request.compositionPlan;instruments=", ".join(f"{x.instrument} ({x.character})" for x in plan.instrumentation);moods=", ".join(plan.mood);source_adherence=max(0,min(100,int(request.sourceAdherence)));style_influence=max(0,min(100,int(request.styleInfluence)));caption=f"{plan.genre}; {moods}; {plan.bpm} BPM; {plan.key} {plan.scale}; instrumentation: {instruments}; requested style: {plan.generationCaption}; style influence {style_influence}%";options=request.providerOptions or {};strength=round(0.30+(source_adherence/100)*0.65,3);guidance=float(options.get("guidanceScale",5.5+(style_influence/100)*3.0))
+        return{"prompt":caption,"lyrics":request.lyrics.strip(),"task_type":"cover","instruction":f"Create a production from the authorized source. Preserve approximately {source_adherence}% of its arrangement, phrasing, melody, and timing; apply approximately {style_influence}% of the requested production direction.","model":options.get("model",self.settings.model),"thinking":False,"audio_format":"wav","bpm":plan.bpm,"key_scale":f"{plan.key} {plan.scale}","time_signature":plan.timeSignature.split("/")[0],"audio_duration":max(10,plan.durationSeconds),"use_random_seed":False,"seed":request.seed,"batch_size":max(1,min(int(options.get("variationCount",1)),8)),"inference_steps":int(options.get("inferenceSteps",self.settings.inference_steps)),"guidance_scale":guidance,"audio_cover_strength":strength,"repainting_start":0.0,"repainting_end":-1,"use_cot_caption":False,"use_cot_language":False}
 
 @dataclass
 class AceStepAudio:
@@ -39,6 +42,12 @@ class AceStepClient:
             return{"apiAvailable":health.is_success,"modelDiscoveryAvailable":models.is_success,"models":model_data,"modelsInitialized":health_data.get("models_initialized",False),"llmInitialized":health_data.get("llm_initialized",False),"loadedModel":health_data.get("loaded_model"),"ready":health.is_success and models.is_success and bool(health_data.get("models_initialized")) and bool(model_data)}
         except httpx.HTTPError:return{"apiAvailable":False,"modelDiscoveryAvailable":False,"models":[],"ready":False}
     async def generate(self,payload:dict[str,Any],source_audio:bytes|None=None,source_mime_type:str="audio/wav")->list[AceStepAudio]:
+        if payload.get("task_type") == "cover":
+            # ACE uses a trained task instruction, not an arbitrary prose command.
+            # Keep musical direction in the caption and preserve caller state.
+            payload = {**payload, "instruction": "Generate audio semantic tokens based on the given conditions:"}
+            if source_audio is None:
+                raise AceStepError("COVER_SOURCE_AUDIO_MISSING")
         try:
             if source_audio is None:response=await self.client.post(f"{self.settings.base_url}/release_task",json=payload,headers=self.headers())
             else:

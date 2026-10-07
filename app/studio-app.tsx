@@ -148,6 +148,25 @@ type VocalProfile = {
     createdAt: string;
   }>;
 };
+type VocalCastRole = "LEAD" | "DUET" | "BACKGROUND";
+type VocalCastAssignment = {
+  section: string;
+  role: VocalCastRole;
+  profileIds: string[];
+};
+function lyricSections(lyrics: string) {
+  return [...lyrics.matchAll(/^\s*\[([^\]]+)\]/gm)].reduce<string[]>(
+    (sections, match) => {
+      const section = match[1]?.trim() || "";
+      return section && !sections.includes(section) ? [...sections, section] : sections;
+    },
+    [],
+  );
+}
+function cleanVocalCast(lyrics: string, assignments: VocalCastAssignment[]) {
+  const sections = new Set(lyricSections(lyrics));
+  return assignments.filter((assignment) => sections.has(assignment.section));
+}
 function importedPerformanceName(filename: string | null) {
   return (filename || "Imported vocal").replace(
     /\.part-\d+-of-\d+\.wav$/i,
@@ -550,6 +569,7 @@ export default function StudioApp() {
     [songs, setSongs] = useState<Song[]>([]),
     [profiles, setProfiles] = useState<VocalProfile[]>([]),
     [selectedVocalProfileId, setSelectedVocalProfileId] = useState(""),
+    [vocalCast, setVocalCast] = useState<VocalCastAssignment[]>([]),
     [profileName, setProfileName] = useState("My Voice"),
     [profileBusy, setProfileBusy] = useState(false),
     [profileNotice, setProfileNotice] = useState(""),
@@ -606,6 +626,10 @@ export default function StudioApp() {
     [repairSong, setRepairSong] = useState<Song | null>(null),
     [repairImportOpen, setRepairImportOpen] = useState(false),
     [songImportOpen, setSongImportOpen] = useState(false),
+    [coverImportPending, setCoverImportPending] = useState(false),
+    [coverSongOpen, setCoverSongOpen] = useState(false),
+    [coverSource, setCoverSource] = useState<Song | null>(null),
+    [vocalistPermissionOpen, setVocalistPermissionOpen] = useState(false),
     [playing, setPlaying] = useState(false),
     [time, setTime] = useState(0),
     [playbackNotice, setPlaybackNotice] = useState(""),
@@ -691,12 +715,16 @@ export default function StudioApp() {
   useEffect(() => {
     fetch("/api/auth/session")
       .then(async (r) => (await r.json()) as { user: User | null })
-      .then(async (d) => {
-        setUser(d.user);
-        if (d.user) await Promise.all([loadSongs(), loadProfiles()]);
-      })
+      .then((d) => setUser(d.user))
       .catch(() => setUser(null));
-  }, [loadProfiles, loadSongs]);
+  }, []);
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setTimeout(() => {
+      void Promise.all([loadSongs(), loadProfiles()]);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [user, loadProfiles, loadSongs]);
   useEffect(() => {
     window.localStorage.setItem(
       "dozi:quality-reviews:v1",
@@ -1001,6 +1029,7 @@ export default function StudioApp() {
             durationSeconds,
             providerPolicyAccepted,
             vocalProfileId: instrumental ? null : selectedVocalProfileId || null,
+            vocalCast: instrumental ? [] : cleanVocalCast(lyrics, vocalCast),
           }),
         }),
         data = (await res.json()) as {
@@ -1022,6 +1051,7 @@ export default function StudioApp() {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
     setSongs([]);
+    setProfiles([]);
     setActive(null);
     setPlaying(false);
   }
@@ -1828,6 +1858,13 @@ export default function StudioApp() {
                     onChange={(e) => setLyrics(e.target.value)}
                     placeholder="Leave blank and Dozi will write lyrics, or add your own…"
                   />
+                  <VocalCastEditor
+                    lyrics={lyrics}
+                    profiles={activeVocalProfiles}
+                    assignments={vocalCast}
+                    onChange={setVocalCast}
+                    onInvite={() => setVocalistPermissionOpen(true)}
+                  />
                 </>
               )}
               {mode === "Advanced" && (
@@ -1975,6 +2012,9 @@ export default function StudioApp() {
                   <span>{songs.length} songs</span>
                 </div>
                 <div className="results-actions">
+                  <button onClick={() => { setCoverSource(null); setCoverSongOpen(true); }}>
+                    Cover song
+                  </button>
                   <button onClick={() => setSongImportOpen(true)}>
                     Import full song
                   </button>
@@ -2031,6 +2071,9 @@ export default function StudioApp() {
                 />
               </div>
               <div className="library-actions">
+                <button onClick={() => { setCoverSource(null); setCoverSongOpen(true); }}>
+                  Cover song
+                </button>
                 <button onClick={() => setSongImportOpen(true)}>
                   Import full song
                 </button>
@@ -2148,6 +2191,13 @@ export default function StudioApp() {
                         onClick={() => void openWorkspace(s)}
                       >
                         Open tracks
+                      </button>
+                      <button
+                        className="library-open"
+                        disabled={s.status !== "COMPLETE" || !s.audioUrl}
+                        onClick={() => { setCoverSource(s); setCoverSongOpen(true); }}
+                      >
+                        Cover
                       </button>
                       {s.songId && (
                         <button
@@ -2695,12 +2745,50 @@ export default function StudioApp() {
       )}
       {songImportOpen && (
         <FullSongImportModal
-          onClose={() => setSongImportOpen(false)}
+          onClose={() => {
+            setSongImportOpen(false);
+            if (coverImportPending) {
+              setCoverImportPending(false);
+              setCoverSongOpen(true);
+            }
+          }}
           onImported={(song) => {
             setSongs((items) => [song, ...items]);
             setSongImportOpen(false);
-            void openWorkspace(song);
+            if (coverImportPending) {
+              setCoverImportPending(false);
+              setCoverSource(song);
+              setCoverSongOpen(true);
+            } else {
+              void openWorkspace(song);
+            }
           }}
+        />
+      )}
+      {coverSongOpen && (
+        <CoverSongModal
+          songs={songs}
+          profiles={activeVocalProfiles}
+          initialSource={coverSource}
+          onInvite={() => setVocalistPermissionOpen(true)}
+          onImportSource={() => {
+            setCoverSongOpen(false);
+            setCoverImportPending(true);
+            setSongImportOpen(true);
+          }}
+          onClose={() => { setCoverSongOpen(false); setCoverSource(null); }}
+          onStarted={(song) => {
+            setSongs((items) => [song, ...items]);
+            setCoverSongOpen(false);
+            setCoverSource(null);
+          }}
+        />
+      )}
+      {vocalistPermissionOpen && (
+        <VocalistPermissionModal
+          profiles={profiles}
+          onClose={() => setVocalistPermissionOpen(false)}
+          onCreated={() => void loadProfiles()}
         />
       )}
       {profileError && (
@@ -2856,7 +2944,7 @@ function FullSongImportModal({
         wav = encodeStereoPcm16Wav(rendered);
       if (wav.size > 120 * 1024 * 1024)
         throw new Error("This song is too large after preparation. Choose a shorter file.");
-      setMessage("Saving the song securely…");
+      setMessage("Detecting lyrics locally and saving the song securely…");
       const form = new FormData(),
         [musicalKey, scale] = keyScale.split(":");
       form.set(
@@ -2990,6 +3078,540 @@ function FullSongImportModal({
           </button>
         </form>
         {message && <p className="song-import-status" role="status">{message}</p>}
+        {error && <p className="repair-error" role="alert">{error}</p>}
+      </section>
+    </div>
+  );
+}
+
+function VocalCastEditor({
+  lyrics,
+  profiles,
+  assignments,
+  onChange,
+  onInvite,
+}: {
+  lyrics: string;
+  profiles: VocalProfile[];
+  assignments: VocalCastAssignment[];
+  onChange: (assignments: VocalCastAssignment[]) => void;
+  onInvite?: () => void;
+}) {
+  const sections = lyricSections(lyrics);
+  const assignmentFor = (section: string) =>
+    assignments.find((assignment) => assignment.section === section) || {
+      section,
+      role: "LEAD" as const,
+      profileIds: [],
+    };
+  const save = (next: VocalCastAssignment) =>
+    onChange([
+      ...assignments.filter((assignment) => assignment.section !== next.section),
+      { ...next, profileIds: next.profileIds.filter(Boolean) },
+    ]);
+  const setProfile = (section: string, slot: number, profileId: string) => {
+    const assignment = assignmentFor(section);
+    const profileIds = [...assignment.profileIds];
+    profileIds[slot] = profileId;
+    save({ ...assignment, profileIds });
+  };
+  if (!sections.length)
+    return (
+      <section className="vocal-cast vocal-cast-empty">
+        <div>
+          <span>VOCAL CAST</span>
+          <strong>Assign singers by section</strong>
+        </div>
+        {onInvite && <button type="button" className="vocal-cast-invite" onClick={onInvite}>Invite vocalist</button>}
+        <small>
+          Add lyric headings such as [Verse 1], [Chorus], and [Bridge] to assign
+          a vocalist or duet to each section.
+        </small>
+      </section>
+    );
+  return (
+    <section className="vocal-cast" aria-label="Vocal cast assignments">
+      <div className="vocal-cast-head">
+        <div>
+          <span>VOCAL CAST</span>
+          <strong>Who sings each section?</strong>
+        </div>
+        {onInvite ? <button type="button" className="vocal-cast-invite" onClick={onInvite}>Invite vocalist</button> : <small>{profiles.length ? "Private voices only" : "Add a ready profile in My Voice"}</small>}
+      </div>
+      <p>
+        Choose a lead, duet, or background role. The cast map stays with the
+        song and its private vocal-production settings.
+      </p>
+      <div className="vocal-cast-list">
+        {sections.map((section) => {
+          const assignment = assignmentFor(section);
+          const firstProfile = assignment.profileIds[0] || "";
+          const secondProfile = assignment.profileIds[1] || "";
+          return (
+            <fieldset key={section} className="vocal-cast-row">
+              <legend>{section}</legend>
+              <label>
+                Role
+                <select
+                  value={assignment.role}
+                  onChange={(event) => {
+                    const role = event.target.value as VocalCastRole;
+                    save({
+                      ...assignment,
+                      role,
+                      profileIds: role === "DUET" ? assignment.profileIds.slice(0, 2) : assignment.profileIds.slice(0, 1),
+                    });
+                  }}
+                >
+                  <option value="LEAD">Lead</option>
+                  <option value="DUET">Duet</option>
+                  <option value="BACKGROUND">Background vocal</option>
+                </select>
+              </label>
+              <label>
+                {assignment.role === "DUET" ? "Voice one" : "Voice"}
+                <select
+                  value={firstProfile}
+                  onChange={(event) => setProfile(section, 0, event.target.value)}
+                >
+                  <option value="">Provider vocalist</option>
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name} · My Voice V{profile.activeVersionNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {assignment.role === "DUET" && (
+                <label>
+                  Voice two
+                  <select
+                    value={secondProfile}
+                    onChange={(event) => setProfile(section, 1, event.target.value)}
+                  >
+                    <option value="">Choose a second private voice</option>
+                    {profiles
+                      .filter((profile) => profile.id !== firstProfile)
+                      .map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name} · My Voice V{profile.activeVersionNumber}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+            </fieldset>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function VocalistPermissionModal({
+  profiles,
+  onClose,
+  onCreated,
+}: {
+  profiles: VocalProfile[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [vocalistName, setVocalistName] = useState("");
+  const [projectTitle, setProjectTitle] = useState("");
+  const [profileId, setProfileId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [link, setLink] = useState("");
+  const [copied, setCopied] = useState(false);
+  async function createLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !vocalistName.trim() || !projectTitle.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/vocalist-permissions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          vocalistName: vocalistName.trim(),
+          projectTitle: projectTitle.trim(),
+          profileId: profileId || undefined,
+        }),
+      });
+      const body = (await response.json()) as { publicUrl?: string; error?: { message?: string } };
+      if (!response.ok || !body.publicUrl) throw new Error(body.error?.message || "Could not create the permission link.");
+      setLink(body.publicUrl);
+      onCreated();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not create the permission link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      setError("Select and copy the link below, then text it to your vocalist.");
+    }
+  }
+  // Permission links need a public HTTPS origin before they can safely be
+  // texted to a collaborator who is not on the studio's local network.
+  const localLink = Boolean(link) && !link.startsWith("https://");
+  return (
+    <div className="repair-modal-backdrop" role="presentation">
+      <section className="repair-modal repair-import-modal permission-modal" role="dialog" aria-modal="true" aria-labelledby="vocalist-permission-title">
+        <div className="repair-modal-head">
+          <div><small>REMOTE VOCALIST</small><h2 id="vocalist-permission-title">Send a simple permission link</h2></div>
+          <button aria-label="Close vocalist permission" disabled={busy} onClick={onClose}>×</button>
+        </div>
+        {!link ? (
+          <form className="repair-form" onSubmit={createLink}>
+            <p className="repair-import-help">Your collaborator does not need a Dozi account. They open one phone-friendly page, read what the project allows, type their name, and tap I agree.</p>
+            <label>VOCALIST NAME<input value={vocalistName} maxLength={80} disabled={busy} onChange={(event) => setVocalistName(event.target.value)} placeholder="Their full name" required /></label>
+            <label>PROJECT OR SONG NAME<input value={projectTitle} maxLength={120} disabled={busy} onChange={(event) => setProjectTitle(event.target.value)} placeholder="For example: Round and Round" required /></label>
+            <label>PRIVATE PROFILE<select value={profileId} disabled={busy} onChange={(event) => setProfileId(event.target.value)}><option value="">Create a new private profile for this vocalist</option>{profiles.filter((profile) => profile.status !== "REVOKED").map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+            <button className="repair-primary" disabled={busy}>{busy ? "Creating link…" : "Create phone permission link"}</button>
+          </form>
+        ) : (
+          <div className="permission-link-result">
+            <p><strong>Ready to text.</strong> Send this link to {vocalistName}. They do not need a Dozi login.</p>
+            <input aria-label="Vocalist permission link" value={link} readOnly onFocus={(event) => event.currentTarget.select()} />
+            <button className="repair-primary" onClick={copyLink}>{copied ? "Copied — paste into a text" : "Copy link"}</button>
+            {localLink && <p className="repair-error">This is a local-only link. It will work on this studio or your local network; deploy Dozi to a public URL before texting someone who is away.</p>}
+          </div>
+        )}
+        {error && <p className="repair-error" role="alert">{error}</p>}
+      </section>
+    </div>
+  );
+}
+
+function CoverSongModal({
+  songs,
+  profiles,
+  initialSource,
+  onInvite,
+  onImportSource,
+  onClose,
+  onStarted,
+}: {
+  songs: Song[];
+  profiles: VocalProfile[];
+  initialSource: Song | null;
+  onInvite: () => void;
+  onImportSource: () => void;
+  onClose: () => void;
+  onStarted: (song: Song) => void;
+}) {
+  const sources = songs.filter(
+      (song) => song.status === "COMPLETE" && song.songId && song.audioUrl,
+    ),
+    [sourceSongId, setSourceSongId] = useState(initialSource?.songId || ""),
+    // A cover should begin as a faithful performance.  Moving either control
+    // deliberately opts into ACE-Step's less predictable re-imagining route.
+    [sourceAdherence, setSourceAdherence] = useState(100),
+    [styleInfluence, setStyleInfluence] = useState(0),
+    [vocalProfileId, setVocalProfileId] = useState(""),
+    [voiceIdentityStrength, setVoiceIdentityStrength] = useState(100),
+    [lyricsSaving, setLyricsSaving] = useState(false),
+    [lyricsNotice, setLyricsNotice] = useState(""),
+    [title, setTitle] = useState(initialSource ? `${initialSource.title} · Cover` : ""),
+    [direction, setDirection] = useState(
+      "Polished, natural vocal performance with a clear finished-record balance",
+    ),
+    [lyrics, setLyrics] = useState(""),
+    [vocalCast, setVocalCast] = useState<VocalCastAssignment[]>([]),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [previewing, setPreviewing] = useState(false),
+    previewAudio = useRef<HTMLAudioElement | null>(null);
+  const source = sources.find((song) => song.songId === sourceSongId),
+    usePrivateVoice = Boolean(vocalProfileId) && voiceIdentityStrength > 0,
+    isExact = usePrivateVoice && sourceAdherence >= 95 && styleInfluence <= 10,
+    rightsAttested = true;
+  useEffect(() => {
+    if (!sourceSongId) return;
+    let cancelled = false;
+    void fetch(`/api/songs/${sourceSongId}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const data = (await response.json()) as SongWorkspace;
+        if (!cancelled) setLyrics(data.song?.lyrics || "");
+      })
+      .catch(() => {
+        if (!cancelled) setLyrics("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceSongId]);
+  useEffect(() => () => {
+    previewAudio.current?.pause();
+    previewAudio.current = null;
+  }, []);
+  function chooseSource(nextSongId: string) {
+    previewAudio.current?.pause();
+    previewAudio.current = null;
+    setPreviewing(false);
+    const next = sources.find((song) => song.songId === nextSongId);
+    setSourceSongId(nextSongId);
+    setLyrics("");
+    if (next) setTitle(`${next.title} · Cover`);
+  }
+  async function togglePreview() {
+    if (!source?.audioUrl) return;
+    if (previewAudio.current && !previewAudio.current.paused) {
+      previewAudio.current.pause();
+      previewAudio.current.currentTime = 0;
+      setPreviewing(false);
+      return;
+    }
+    const audio = previewAudio.current || new Audio(source.audioUrl);
+    previewAudio.current = audio;
+    audio.addEventListener("ended", () => setPreviewing(false), { once: true });
+    try {
+      await audio.play();
+      setPreviewing(true);
+    } catch {
+      setError("Dozi could not start this preview. Try the song’s Play button in Library.");
+    }
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!source?.songId || !rightsAttested || busy)
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/covers", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({
+            title: title.trim() || `${source.title} · Cover`,
+            prompt: direction,
+            lyrics,
+            instrumental: false,
+            genre: source.genre,
+            bpm: source.bpm,
+            key: source.musicalKey.split(" ")[0],
+            scale: source.musicalKey.toLowerCase().includes("major")
+              ? "major"
+              : "minor",
+            durationSeconds: Math.max(3, Math.min(600, Math.round(source.duration))),
+            providerPolicyAccepted: rightsAttested,
+            vocalProfileId: usePrivateVoice ? vocalProfileId : null,
+            providerOptions: { voiceIdentityStrength },
+            vocalCast: cleanVocalCast(lyrics, vocalCast),
+            cover: {
+              sourceSongId: source.songId,
+              mode: isExact ? "EXACT" : "REIMAGINE",
+              arrangement: sourceAdherence >= 70 ? "REFRESH" : "NEW",
+              sourceAdherence,
+              styleInfluence,
+              voiceIdentityStrength: usePrivateVoice ? voiceIdentityStrength : 0,
+              rightsAttested: true,
+            },
+          }),
+        });
+      const payload = (await response.json()) as {
+        song?: Song;
+        error?: { message?: string };
+      };
+      if (!response.ok || !payload.song)
+        throw new Error(payload.error?.message || "Cover could not start.");
+      onStarted(payload.song);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Cover could not start.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="repair-modal-backdrop" role="presentation">
+      <section
+        className="repair-modal repair-import-modal song-import-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cover-song-title"
+      >
+        <div className="repair-modal-head">
+          <div>
+            <small>PRIVATE COVER SONG</small>
+            <h2 id="cover-song-title">Create a cover performance</h2>
+          </div>
+          <button aria-label="Close cover song" disabled={busy} onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <p className="repair-import-help">
+          Decide how closely Dozi follows the original arrangement, how much of
+          your production direction it applies, and whether to blend in a private voice.
+        </p>
+        <form className="repair-form" onSubmit={submit}>
+          <label>
+            SOURCE SONG
+            <select
+              value={sourceSongId}
+              disabled={busy || !sources.length}
+              required
+              onChange={(event) => chooseSource(event.target.value)}
+            >
+              <option value="">
+                {sources.length ? "Choose a private source song" : "No private songs available"}
+              </option>
+              {sources.map((song) => (
+                <option key={song.songId} value={song.songId}>
+                  {song.title} · {Math.round(song.duration)}s
+                </option>
+              ))}
+            </select>
+            <small>
+              Don&apos;t see the song?{" "}
+              <button
+                type="button"
+                className="inline-action"
+                onClick={onImportSource}
+                disabled={busy}
+              >
+                Choose a file from this Mac
+              </button>
+              . Dozi will return here with it selected.
+            </small>
+            {source?.audioUrl && (
+              <button
+                type="button"
+                className="inline-action"
+                disabled={busy}
+                aria-pressed={previewing}
+                onClick={() => void togglePreview()}
+              >
+                {previewing ? "Stop selected-song preview" : "Play selected song"}
+              </button>
+            )}
+          </label>
+          <label>
+            ORIGINAL ARRANGEMENT · {sourceAdherence}%
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={sourceAdherence}
+              disabled={busy}
+              onChange={(event) => setSourceAdherence(Number(event.target.value))}
+            />
+            <small>0% freely reworks the song. 100% asks to retain its arrangement, melody, phrasing, and timing.</small>
+          </label>
+          <label>
+            STYLE INFLUENCE · {styleInfluence}%
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={styleInfluence}
+              disabled={busy}
+              onChange={(event) => setStyleInfluence(Number(event.target.value))}
+            />
+            <small>0% stays near the source&apos;s production. 100% strongly follows your production direction below.</small>
+          </label>
+          <label>
+            VOCALIST
+            <select
+              value={vocalProfileId}
+              disabled={busy}
+              onChange={(event) => setVocalProfileId(event.target.value)}
+            >
+              <option value="">Provider vocalist</option>
+              {profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name} · My Voice V{profile.activeVersionNumber}
+                </option>
+              ))}
+            </select>
+            <small>
+              Choose a private vocalist only when you want to blend that voice into the cover. Leave Provider vocalist selected for a generated singer.
+            </small>
+          </label>
+          {vocalProfileId && (
+            <label>
+              PRIVATE VOICE AMOUNT · {voiceIdentityStrength}%
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={voiceIdentityStrength}
+                disabled={busy}
+                onChange={(event) => setVoiceIdentityStrength(Number(event.target.value))}
+              />
+              <small>0% keeps the generated vocalist. 100% applies the selected private voice as fully as the current vocal conversion can.</small>
+            </label>
+          )}
+          <label>
+            SONG LYRICS
+            <small>Paste or correct the words. Use [Verse 1], [Chorus], [Verse 2], [Bridge], and [Outro] to mark sections.</small>
+            <textarea className="lyrics" rows={12} value={lyrics} maxLength={10000}
+              disabled={busy || lyricsSaving}
+              onChange={(event) => { setLyrics(event.target.value); setLyricsNotice(""); }}
+              placeholder={'[Verse 1]\nLyrics here…\n\n[Chorus]\nLyrics here…\n\n[Bridge]\nLyrics here…'} />
+          </label>
+          {!lyrics.trim() && <p role="status">No lyrics saved for this song. Add the correct words before testing a generated vocalist.</p>}
+          <button type="button" disabled={!source || busy || lyricsSaving} onClick={async () => {
+            setLyricsSaving(true); setLyricsNotice("");
+            try {
+              const response = await fetch(`/api/songs/${sourceSongId}`, {method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({lyrics})});
+              if(!response.ok) throw new Error("Lyrics could not be saved. Please try again.");
+              setLyricsNotice("Lyrics saved to the source song. These words will also be used for this cover.");
+            } catch(reason) {setLyricsNotice(reason instanceof Error ? reason.message : "Lyrics could not be saved.");}
+            finally {setLyricsSaving(false);}
+          }}>{lyricsSaving ? "Saving lyrics…" : "Save lyrics to song"}</button>
+          {lyricsNotice && <p role="status">{lyricsNotice}</p>}
+          <details className="cover-advanced">
+            <summary>Style, title, and vocal cast</summary>
+          <label>
+            COVER TITLE
+            <input
+              value={title}
+              maxLength={120}
+              disabled={busy}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder={source ? `${source.title} · Cover` : "Cover title"}
+            />
+          </label>
+          <>
+            <label>
+              PRODUCTION DIRECTION
+              <textarea
+                value={direction}
+                maxLength={500}
+                disabled={busy}
+                onChange={(event) => setDirection(event.target.value)}
+              />
+            </label>
+            <VocalCastEditor
+              lyrics={lyrics}
+              profiles={profiles}
+              assignments={vocalCast}
+              onChange={setVocalCast}
+              onInvite={onInvite}
+            />
+          </>
+          </details>
+          <p className="cover-rights-notice">
+            By generating, you confirm that you own or control this source song,
+            its lyrics, and this cover use. The source remains private in Dozi.
+          </p>
+          <button
+            className="repair-primary"
+            disabled={!source || busy}
+          >
+            {busy ? "Starting cover…" : "Generate cover"}
+          </button>
+        </form>
         {error && <p className="repair-error" role="alert">{error}</p>}
       </section>
     </div>
@@ -3680,6 +4302,8 @@ function MultitrackWorkspace({
   const [mixBusy, setMixBusy] = useState<"" | "saving" | "rendering">(""),
     [mixNotice, setMixNotice] = useState(""),
     [mixError, setMixError] = useState(""),
+    [transcriptBusy, setTranscriptBusy] = useState(false),
+    [transcriptError, setTranscriptError] = useState(""),
     [replaceTrack, setReplaceTrack] = useState<TrackAsset | null>(null),
     [replaceFile, setReplaceFile] = useState<File | null>(null),
     [replaceRights, setReplaceRights] = useState(false),
@@ -4202,6 +4826,26 @@ function MultitrackWorkspace({
     setSeparation(payload.job);
     if (payload.job.status === "COMPLETE") await onRefresh();
   }
+  async function detectLyrics() {
+    if (transcriptBusy) return;
+    setTranscriptBusy(true);
+    setTranscriptError("");
+    try {
+      const response = await fetch(`/api/songs/${data.song.id}/lyrics/transcribe`, {
+          method: "POST",
+        }),
+        payload = (await response.json()) as { error?: { message?: string } };
+      if (!response.ok)
+        throw new Error(payload.error?.message || "Lyrics could not be detected.");
+      await onRefresh();
+    } catch (reason) {
+      setTranscriptError(
+        reason instanceof Error ? reason.message : "Lyrics could not be detected.",
+      );
+    } finally {
+      setTranscriptBusy(false);
+    }
+  }
   async function saveMixSettings() {
     if (!version || !tracks.length) return;
     setMixBusy("saving");
@@ -4658,6 +5302,20 @@ function MultitrackWorkspace({
           )}
         </label>
       </div>
+      {version.provider === "user-upload" && (
+        <details className="workspace-lyrics">
+          <summary>Detected lyrics <span>Private draft · review before using in a cover or vocal cast</span></summary>
+          {data.song.lyrics.trim() ? (
+            <p>{data.song.lyrics}</p>
+          ) : (
+            <p>No lyric draft has been found yet. You can run the local detector again.</p>
+          )}
+          <button className="workspace-lyrics-action" onClick={() => void detectLyrics()} disabled={transcriptBusy}>
+            {transcriptBusy ? "Detecting lyrics…" : data.song.lyrics.trim() ? "Re-detect lyrics" : "Detect lyrics"}
+          </button>
+          {transcriptError && <p className="workspace-lyrics-error" role="alert">{transcriptError}</p>}
+        </details>
+      )}
       <div className="mixer-transport">
         {data.versions.map((item) =>
           item.audioUrl ? (

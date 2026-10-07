@@ -10,6 +10,7 @@ export type VocalIdentitySelection = {
 export type VocalIdentityProcessingRequest = VocalIdentitySelection & {
   jobId: string;
   source: GeneratedAsset;
+  voiceIdentityStrength: number;
 };
 
 export interface VocalIdentityProcessor {
@@ -41,6 +42,7 @@ export class HttpVocalIdentityProcessor implements VocalIdentityProcessor {
           indexRef: request.indexRef,
           sourceMimeType: request.source.metadata.mimeType,
           sourceAudioBase64: bytesToBase64(bytes),
+          voiceIdentityStrength: request.voiceIdentityStrength,
         }),
       });
     } catch {
