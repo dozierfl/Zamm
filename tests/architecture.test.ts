@@ -11,6 +11,17 @@ import {
 } from "../lib/providers.ts";
 import { InlineTestGenerationQueue } from "../lib/generation-queue.ts";
 import { validateElevenLabsPolicy } from "../lib/provider-policy.ts";
+test("generation options accept nested JSON and reject non-JSON values", () => {
+  const input = { prompt: "warm reflective soul performance" };
+  const defaults = createGenerationSchema.parse(input);
+  assert.deepEqual(defaults.providerOptions, {});
+  assert.deepEqual(defaults.vocalCast, []);
+  const providerOptions = { seed: 42, enabled: true, nested: [null, "warm", { gain: 0.5 }] };
+  assert.deepEqual(createGenerationSchema.parse({ ...input, providerOptions }).providerOptions, providerOptions);
+  for (const invalid of [undefined, () => true, BigInt(1), new Date(), NaN]) {
+    assert.equal(createGenerationSchema.safeParse({ ...input, providerOptions: { invalid } }).success, false);
+  }
+});
 test("generation status GET is observational only", async () => {
   const source = await readFile(
     new URL("../app/api/generations/[id]/route.ts", import.meta.url),
@@ -80,7 +91,7 @@ test("mock provider supports one aligned master and six aligned assets", async (
       lyrics: "",
       instrumental: false,
     },
-    plan = compose(input),
+    plan = compose(createGenerationSchema.parse(input)),
     provider = new MockMusicProvider(),
     base = {
       jobId: "j",
@@ -107,7 +118,7 @@ test("mock provider supports one aligned master and six aligned assets", async (
   );
 });
 test("advanced tempo and tonality overrides reach the composition plan", async () => {
-  const plan = compose({
+  const plan = compose(createGenerationSchema.parse({
     prompt: "polished full-band neo-soul song",
     lyrics: "Test lyric",
     instrumental: false,
@@ -116,7 +127,7 @@ test("advanced tempo and tonality overrides reach the composition plan", async (
     bpm: 82,
     key: "E",
     scale: "minor",
-  });
+  }));
   assert.equal(plan.bpm, 82);
   assert.equal(plan.key, "E");
   assert.equal(plan.scale, "minor");
@@ -876,7 +887,7 @@ test("Eleven Music sends a master-only v2 request and normalizes binary audio", 
       lyrics: "Hold on to the light",
       instrumental: false,
     },
-    plan = compose(input);
+    plan = compose(createGenerationSchema.parse(input));
   let sent: RequestInit | undefined;
   globalThis.fetch = async (url, init) => {
     assert.equal(
@@ -920,13 +931,13 @@ test("Eleven Music sends a master-only v2 request and normalizes binary audio", 
 });
 test("Eleven Music uploads an owned source and conditions a new cover arrangement", async () => {
   const original = globalThis.fetch,
-    plan = compose({
+    plan = compose(createGenerationSchema.parse({
       prompt: "polished neo-soul cover production",
       durationSeconds: 12,
       outputMode: "MASTER_ONLY" as const,
       lyrics: "[Verse]\nI will sing this again",
       instrumental: false,
-    });
+    }));
   const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url, init });
@@ -938,7 +949,7 @@ test("Eleven Music uploads an owned source and conditions a new cover arrangemen
   try {
     const result = await new ElevenLabsMusicProvider("secret-key", "music_v2").generateCover!(
       { jobId: "j", userId: "u", songId: "s", versionId: "v", compositionPlan: plan, lyrics: "[Verse]\nI will sing this again", seed: 42, outputMode: "MASTER_ONLY" },
-      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH" },
+      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH", sourceAdherence: 82, styleInfluence: 55 },
     );
     assert.equal(calls.length, 2);
     assert.equal(String(calls[0].url), "https://api.elevenlabs.io/v1/music/upload");
@@ -954,7 +965,7 @@ test("Eleven Music uploads an owned source and conditions a new cover arrangemen
 });
 test("ACE-Step keeps a private source inside the local gateway for a cover arrangement", async () => {
   const original = globalThis.fetch,
-    plan = compose({ prompt: "full-band neo-soul refresh", durationSeconds: 12, outputMode: "MASTER_ONLY" as const, lyrics: "", instrumental: false }),
+    plan = compose(createGenerationSchema.parse({ prompt: "full-band neo-soul refresh", durationSeconds: 12, outputMode: "MASTER_ONLY" as const, lyrics: "", instrumental: false })),
     calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url, init });
@@ -964,7 +975,7 @@ test("ACE-Step keeps a private source inside the local gateway for a cover arran
   try {
     const result = await new AceStepMusicProvider("http://gateway").generateCover!(
       { jobId: "j", userId: "u", songId: "s", versionId: "v", compositionPlan: plan, lyrics: "", seed: 42, outputMode: "MASTER_ONLY" },
-      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH" },
+      { sourceAssetId: "asset-1", sourceTitle: "Owned song", sourceAudio: new Uint8Array([1, 2, 3]), sourceMimeType: "audio/wav", sourceDurationSeconds: 42, arrangement: "REFRESH", sourceAdherence: 82, styleInfluence: 55 },
     );
     assert.equal(calls.length, 2);
     assert.equal(String(calls[0].url), "http://gateway/v1/ace-step-cover");
@@ -985,7 +996,7 @@ test("Eleven Music normalizes copyrighted prompt rejection without exposing prov
       lyrics: "",
       instrumental: true,
     },
-    plan = compose(input);
+    plan = compose(createGenerationSchema.parse(input));
   globalThis.fetch = async () =>
     Response.json(
       {

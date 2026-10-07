@@ -7,7 +7,7 @@ export async function PATCH(request:Request,{params}:{params:Promise<{id:string}
   try{
     const user=await requireUser(request,bindings.DATABASE_URL),{id}=await params;
     const body=await request.json();
-    if(typeof body.lyrics!=="string"||body.lyrics.length>10000)return Response.json({error:{message:"Lyrics must be text, up to 10,000 characters."}},{status:400});
+    if(typeof body!=="object"||body===null||!("lyrics" in body)||typeof body.lyrics!=="string"||body.lyrics.length>10000)return Response.json({error:{message:"Lyrics must be text, up to 10,000 characters."}},{status:400});
     const sql=getSql(bindings.DATABASE_URL);
     const rows=await sql`update songs set lyrics=${body.lyrics} where id=${id} and user_id=${user.id} and archived_at is null returning id`;
     if(!rows.length)return Response.json({error:{message:"Song not found."}},{status:404});

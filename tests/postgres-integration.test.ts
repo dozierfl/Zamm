@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import postgres from "postgres";
 import { MemoryAudioStorage } from "../lib/audio-storage.ts";
-import { compose } from "../lib/domain.ts";
+import { compose, createGenerationSchema } from "../lib/domain.ts";
 import { GenerationOrchestrator } from "../lib/generation-orchestrator.ts";
 import { MockMusicProvider } from "../lib/providers.ts";
 import type { MusicGenerationProvider } from "../lib/provider-types.ts";
@@ -11,7 +11,7 @@ const integration=url?test:test.skip;
 integration("queue recovery, multi-user authorization, idempotency, and failures",async()=>{
   const sql=postgres(url!,{prepare:false}),suffix=crypto.randomUUID().slice(0,8),userA=crypto.randomUUID(),userB=crypto.randomUUID();
   await sql`insert into users(id,email,display_name,password_hash,password_salt) values(${userA},${`a-${suffix}@test.invalid`},'A','x','x'),(${userB},${`b-${suffix}@test.invalid`},'B','x','x')`;
-  const makeJob=async(mode:"MASTER_ONLY"|"MULTI_ASSET",provider="mock")=>{const songId=crypto.randomUUID(),jobId=crypto.randomUUID(),versionId=crypto.randomUUID(),input={prompt:"warm reflective soul integration",lyrics:"",instrumental:false,durationSeconds:1,outputMode:mode},plan=compose(input);await sql`insert into songs(id,user_id,title,next_version_number) values(${songId},${userA},'Test',2)`;await sql`insert into generation_jobs(id,version_id,user_id,song_id,reserved_version_number,idempotency_key,provider,provider_model,request_payload,composition_plan,seed) values(${jobId},${versionId},${userA},${songId},1,${crypto.randomUUID()},${provider},'test',${sql.json(input)},${sql.json(plan)},42)`;return{jobId,versionId}};
+  const makeJob=async(mode:"MASTER_ONLY"|"MULTI_ASSET",provider="mock")=>{const songId=crypto.randomUUID(),jobId=crypto.randomUUID(),versionId=crypto.randomUUID(),input={prompt:"warm reflective soul integration",lyrics:"",instrumental:false,durationSeconds:1,outputMode:mode},plan=compose(createGenerationSchema.parse(input));await sql`insert into songs(id,user_id,title,next_version_number) values(${songId},${userA},'Test',2)`;await sql`insert into generation_jobs(id,version_id,user_id,song_id,reserved_version_number,idempotency_key,provider,provider_model,request_payload,composition_plan,seed) values(${jobId},${versionId},${userA},${songId},1,${crypto.randomUUID()},${provider},'test',${sql.json(input)},${sql.json(plan)},42)`;return{jobId,versionId}};
   try{
     const storage=new MemoryAudioStorage(),orchestrator=new GenerationOrchestrator(sql,storage,()=>new MockMusicProvider()),multi=await makeJob("MULTI_ASSET");await orchestrator.process(multi.jobId);await orchestrator.process(multi.jobId);
     const counts=await sql<{versions:number;assets:number;mappings:number}[]>`select (select count(*)::int from song_versions where generation_job_id=${multi.jobId}) versions,(select count(*)::int from audio_assets where generation_job_id=${multi.jobId}) assets,(select count(*)::int from version_assets where song_version_id=${multi.versionId}) mappings`;assert.deepEqual(counts[0],{versions:1,assets:6,mappings:6});
