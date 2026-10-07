@@ -55,8 +55,51 @@ export class ElevenLabsMusicProvider implements MusicGenerationProvider{
     return{assets:[{assetKey:"cover-master",role:"MASTER",provenance:"GENERATED_NATIVE",isPrimary:true,sortOrder:0,sourceAssetId:reference.sourceAssetId,audio:{bytes},metadata:{mimeType:response.headers.get("content-type")?.split(";")[0]||"audio/mpeg",codec:"mp3",sampleRate:48000,bitDepth:16,channels:2,durationSeconds:durationMs/1000,waveformData:[]},providerMetadata:metadata}],providerMetadata:metadata};
   }
 }
-export type ProviderConfig={aiServiceBaseUrl?:string;aiServiceToken?:string;aceStepModel?:string;minimaxModel?:string;elevenLabsApiKey?:string;elevenLabsModel?:string};
-export function createProvider(name:string,config:ProviderConfig={}):MusicGenerationProvider{if(name==="mock")return new MockMusicProvider();if(name==="ai-service"&&config.aiServiceBaseUrl)return new AiServiceMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken);if(name==="acestep"&&config.aiServiceBaseUrl)return new AceStepMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken,config.aceStepModel);if(name==="minimax"&&config.aiServiceBaseUrl)return new MiniMaxMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken,config.minimaxModel);if(name==="elevenlabs"&&config.elevenLabsApiKey)return new ElevenLabsMusicProvider(config.elevenLabsApiKey,config.elevenLabsModel);throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
+export class KieMusicProvider implements MusicGenerationProvider{
+  readonly name="kie";
+  constructor(private readonly apiKey:string,readonly model="V6",private readonly baseUrl="https://api.kie.ai",private readonly uploadBaseUrl="https://kieai.redpandaai.co",private readonly pollIntervalMs=5000){}
+  capabilities():ProviderCapabilities{return{...capabilities(false),referenceAudio:true,masterGeneration:"EXPERIMENTAL",seed:false}}
+  async healthCheck():Promise<ProviderHealth>{return{available:Boolean(this.apiKey),latencyMs:0,message:this.apiKey?"Kie.ai configured (generation not yet charged)":"Kie.ai API key missing"}}
+  async generate(request:GenerationRequest):Promise<GenerationResult>{
+    if(request.outputMode!=="MASTER_ONLY")throw new Error("PROVIDER_OUTPUT_MODE_UNSUPPORTED");
+    return this.createAndWait("ai-music-api/generate",this.input(request),request);
+  }
+  async generateCover(request:GenerationRequest,reference:CoverReference):Promise<GenerationResult>{
+    if(request.outputMode!=="MASTER_ONLY")throw new Error("PROVIDER_OUTPUT_MODE_UNSUPPORTED");
+    if(reference.sourceDurationSeconds>480)throw new Error("COVER_REFERENCE_TOO_LONG");
+    const uploadUrl=await this.upload(reference);
+    return this.createAndWait("ai-music-api/upload-and-cover-audio",{...this.input(request),upload_url:uploadUrl},request,reference);
+  }
+  private input(request:GenerationRequest){const plan=request.compositionPlan;return{prompt:(request.lyrics||"").slice(0,5000),custom_mode:true,instrumental:plan.vocal.enabled===false,model:this.model,style:kieStyle(request).slice(0,1000),title:(plan.titleSuggestions[0]||"Dozi song").slice(0,80),negative_tags:plan.negativeInstructions.join(", ").slice(0,500),duration:plan.durationSeconds}}
+  private headers(){return{authorization:`Bearer ${this.apiKey}`}}
+  private async upload(reference:CoverReference){
+    const extension=reference.sourceMimeType.includes("mpeg")?"mp3":reference.sourceMimeType.includes("mp4")?"m4a":"wav",form=new FormData(),bytes=new Uint8Array(reference.sourceAudio);
+    form.set("file",new Blob([bytes.buffer as ArrayBuffer],{type:reference.sourceMimeType}),`private-cover.${extension}`);form.set("uploadPath","dozi/covers");form.set("fileName",`private-cover.${extension}`);
+    let response:Response;try{response=await fetch(`${this.uploadBaseUrl}/api/file-stream-upload`,{method:"POST",headers:this.headers(),body:form})}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
+    const body=await response.json().catch(()=>null) as {data?:{downloadUrl?:string};message?:string}|null;
+    if(!response.ok||!body?.data?.downloadUrl)throw new Error(kieError(response.status,"COVER_REFERENCE_UPLOAD_FAILED"));
+    return body.data.downloadUrl;
+  }
+  private async createAndWait(operation:string,input:Record<string,unknown>,request:GenerationRequest,reference?:CoverReference):Promise<GenerationResult>{
+    let response:Response;try{response=await fetch(`${this.baseUrl}/api/v1/jobs/createTask`,{method:"POST",headers:{...this.headers(),"content-type":"application/json"},body:JSON.stringify({model:operation,input})})}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
+    const created=await response.json().catch(()=>null) as {data?:{taskId?:string;task_id?:string};message?:string}|null,taskId=created?.data?.taskId||created?.data?.task_id;
+    if(!response.ok||!taskId)throw new Error(kieError(response.status));
+    const track=await this.waitForTrack(taskId),audio=await this.download(track.audioUrl),duration=typeof track.duration==="number"&&track.duration>0?track.duration:request.compositionPlan.durationSeconds,metadata={generationMethod:reference?"COVER_REIMAGINE":"FULL_SONG",taskId,trackId:track.id,title:track.title,model:track.model||this.model,sourceAssetId:reference?.sourceAssetId,sourceTitle:reference?.sourceTitle,arrangement:reference?.arrangement};
+    return{assets:[{assetKey:reference?"kie-cover-master":"kie-master",role:"MASTER",provenance:"GENERATED_NATIVE",isPrimary:true,sortOrder:0,sourceAssetId:reference?.sourceAssetId,audio:{bytes:audio.bytes},metadata:{mimeType:audio.mimeType,codec:audio.mimeType.includes("mpeg")?"mp3":"audio",sampleRate:44100,bitDepth:16,channels:2,durationSeconds:duration,waveformData:[]},providerMetadata:metadata}],providerMetadata:metadata};
+  }
+  private async waitForTrack(taskId:string){
+    for(let attempt=0;attempt<240;attempt++){
+      let response:Response;try{response=await fetch(`${this.baseUrl}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`,{headers:this.headers()})}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
+      const body=await response.json().catch(()=>null) as unknown;if(!response.ok)throw new Error(kieError(response.status));
+      const status=kieStatus(body),track=kieTrack(body);if(track)return track;if(status.includes("FAIL")||status.includes("ERROR"))throw new Error("GENERATION_PROVIDER_FAILED");
+      if(this.pollIntervalMs>0)await new Promise(resolve=>setTimeout(resolve,this.pollIntervalMs));
+    }
+    throw new Error("GENERATION_TIMEOUT");
+  }
+  private async download(url:string){let response:Response;try{response=await fetch(url)}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}if(!response.ok)throw new Error("GENERATION_INVALID_RESULT");const bytes=new Uint8Array(await response.arrayBuffer());if(!bytes.length)throw new Error("GENERATION_INVALID_RESULT");return{bytes,mimeType:response.headers.get("content-type")?.split(";")[0]||"audio/mpeg"}}
+}
+export type ProviderConfig={aiServiceBaseUrl?:string;aiServiceToken?:string;aceStepModel?:string;minimaxModel?:string;elevenLabsApiKey?:string;elevenLabsModel?:string;kieApiKey?:string;kieModel?:string};
+export function createProvider(name:string,config:ProviderConfig={}):MusicGenerationProvider{if(name==="mock")return new MockMusicProvider();if(name==="ai-service"&&config.aiServiceBaseUrl)return new AiServiceMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken);if(name==="acestep"&&config.aiServiceBaseUrl)return new AceStepMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken,config.aceStepModel);if(name==="minimax"&&config.aiServiceBaseUrl)return new MiniMaxMusicProvider(config.aiServiceBaseUrl,config.aiServiceToken,config.minimaxModel);if(name==="elevenlabs"&&config.elevenLabsApiKey)return new ElevenLabsMusicProvider(config.elevenLabsApiKey,config.elevenLabsModel);if(name==="kie"&&config.kieApiKey)return new KieMusicProvider(config.kieApiKey,config.kieModel);throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
 export const providers={mock:new MockMusicProvider()};
 function bytesToBase64(bytes:Uint8Array){let binary="";for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(binary)}
 type GatewayResult={assets:Array<Omit<GeneratedAsset,"audio">&{audio:{base64?:string;sourceUrl?:string}}> ;providerMetadata?:Record<string,unknown>};
@@ -64,3 +107,9 @@ async function readGatewayResult(json:GatewayResult,token?:string):Promise<Gener
 function elevenLabsPrompt(request:GenerationRequest){const plan=request.compositionPlan,instruments=plan.instrumentation.map(item=>`${item.instrument} (${item.character})`).join(", "),sections=plan.structure.map(item=>`${item.type}: ${item.description}`).join("; "),lyrics=request.lyrics?.trim(),vocalDirection=plan.vocal.enabled?(lyrics?`Use these lyrics:\n${lyrics}`:`Include an original lead vocal performance and write original lyrics that fit the concept. Vocal tone: ${plan.vocal.tone}; delivery: ${plan.vocal.delivery}.`):"Instrumental only; no vocals.";return[`Create an original ${plan.genre} song.`,`${plan.bpm} BPM, ${plan.key} ${plan.scale}, ${plan.timeSignature}.`,`Mood: ${plan.mood.join(", ")}.`,`Instrumentation: ${instruments}.`,`Structure: ${sections}.`,`Avoid: ${plan.negativeInstructions.join(", ")}.`,vocalDirection].join(" ").slice(0,4100)}
 function elevenLabsError(status:number,requestId?:string){const code=status===401||status===403?"PROVIDER_AUTHORIZATION_FAILED":status===429?"PROVIDER_RATE_LIMITED":status>=500?"GENERATION_PROVIDER_UNAVAILABLE":"GENERATION_PROVIDER_FAILED";return requestId?`${code}:${requestId}`:code}
 function coverUploadError(status:number,providerStatus?:string){if(status===401||status===403)return"PROVIDER_AUTHORIZATION_FAILED";if(status===429)return"PROVIDER_RATE_LIMITED";if(status>=500)return"GENERATION_PROVIDER_UNAVAILABLE";if(providerStatus==="copyright_infringement"||providerStatus==="copyright_violation")return"COVER_REFERENCE_REJECTED";return"COVER_REFERENCE_UPLOAD_FAILED"}
+function kieStyle(request:GenerationRequest){const plan=request.compositionPlan,instruments=plan.instrumentation.map(item=>`${item.instrument} (${item.character})`).join(", "),sections=plan.structure.map(item=>`${item.type}: ${item.description}`).join("; ");return[plan.generationCaption,`${plan.bpm} BPM`,`${plan.key} ${plan.scale}`,`Instruments: ${instruments}`,`Arrangement: ${sections}`,`Vocal: ${plan.vocal.tone}, ${plan.vocal.delivery}`].join(". ")}
+function kieError(status:number,fallback="GENERATION_PROVIDER_FAILED"){if(status===401||status===403)return"PROVIDER_AUTHORIZATION_FAILED";if(status===429)return"PROVIDER_RATE_LIMITED";if(status>=500)return"GENERATION_PROVIDER_UNAVAILABLE";return fallback}
+function kieRecord(value:unknown):Record<string,unknown>|undefined{return value!==null&&typeof value==="object"?value as Record<string,unknown>:undefined}
+function kiePayload(value:unknown){const root=kieRecord(value),data=kieRecord(root?.data);let result:unknown=data?.resultJson??data?.result_json;if(typeof result==="string")try{result=JSON.parse(result)}catch{result=undefined}return{data,result:kieRecord(result)}}
+function kieStatus(value:unknown){const {data}=kiePayload(value),status=data?.status??data?.state;return typeof status==="string"?status.toUpperCase():""}
+function kieTrack(value:unknown){const {data,result}=kiePayload(value),response=kieRecord(data?.response)??kieRecord(result?.response)??result,candidates=response?.sunoData??response?.suno_data??response?.data??data?.sunoData;if(!Array.isArray(candidates))return undefined;for(const item of candidates){const track=kieRecord(item),audioUrl=track?.audio_url??track?.audioUrl;if(typeof audioUrl!=="string"||!audioUrl)continue;return{id:typeof track?.id==="string"?track.id:"kie-track",title:typeof track?.title==="string"?track.title:"Dozi song",audioUrl,duration:typeof track?.duration==="number"?track.duration:undefined,model:typeof track?.model_name==="string"?track.model_name:undefined}}return undefined}

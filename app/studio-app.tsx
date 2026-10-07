@@ -1006,7 +1006,7 @@ export default function StudioApp() {
     if (
       !prompt.trim() ||
       submitting ||
-      (provider.name === "elevenlabs" && !providerPolicyAccepted)
+      (["elevenlabs", "kie"].includes(provider.name) && !providerPolicyAccepted)
     )
       return;
     setSubmitting(true);
@@ -1730,6 +1730,8 @@ export default function StudioApp() {
             <i />
             {provider.name === "elevenlabs"
               ? "Powered by ElevenLabs"
+              : provider.name === "kie"
+                ? "Powered by Kie.ai"
               : provider.name === "acestep"
                 ? "ACE-Step"
                 : provider.name === "mock"
@@ -1916,7 +1918,7 @@ export default function StudioApp() {
                       }
                     >
                       <option value={12}>12 seconds</option>
-                      {["elevenlabs", "minimax"].includes(provider.name) && (
+                      {["elevenlabs", "minimax", "kie"].includes(provider.name) && (
                         <option value={30}>30 seconds</option>
                       )}
                     </select>
@@ -1957,7 +1959,7 @@ export default function StudioApp() {
                   </p>
                 </div>
               )}
-              {provider.name === "elevenlabs" && (
+              {["elevenlabs", "kie"].includes(provider.name) && (
                 <label className="provider-policy">
                   <input
                     type="checkbox"
@@ -1969,9 +1971,10 @@ export default function StudioApp() {
                   <span>
                     <strong>Rights confirmation</strong>
                     <small>
-                      I have rights to this prompt and its lyrics. They will be
-                      sent to ElevenLabs for generation. Artist imitation and
-                      copyrighted lyrics are not permitted.
+                      I have rights to this prompt and its lyrics. {" "}
+                      {provider.name === "kie"
+                        ? "They will be sent to Kie.ai for generation."
+                        : "They will be sent to ElevenLabs for generation."} Artist imitation and copyrighted lyrics are not permitted.
                     </small>
                   </span>
                 </label>
@@ -1982,7 +1985,7 @@ export default function StudioApp() {
                 disabled={
                   !prompt.trim() ||
                   submitting ||
-                  (provider.name === "elevenlabs" && !providerPolicyAccepted)
+                  (["elevenlabs", "kie"].includes(provider.name) && !providerPolicyAccepted)
                 }
               >
                 <Icon name="spark" /> {submitting ? "Starting…" : "Generate"}
@@ -1997,7 +2000,7 @@ export default function StudioApp() {
                   Creates a server-side{" "}
                   {selectedVocalProfileId && !instrumental
                     ? "WAV master with private vocalist"
-                    : provider.name === "elevenlabs"
+                    : ["elevenlabs", "kie"].includes(provider.name)
                       ? "MP3 master"
                       : "WAV master"}{" "}
                   ·{" "}

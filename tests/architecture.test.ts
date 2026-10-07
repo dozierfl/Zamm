@@ -5,6 +5,7 @@ import { compose, contextualTrackGenerationSchema, createGenerationSchema } from
 import {
   AceStepMusicProvider,
   ElevenLabsMusicProvider,
+  KieMusicProvider,
   MiniMaxMusicProvider,
   MockMusicProvider,
   createProvider,
@@ -858,7 +859,7 @@ test("MiniMax UI exposes the 30-second acceptance duration", async () => {
   );
   assert.match(
     source,
-    /\["elevenlabs",\s*"minimax"\]\.includes\(provider\.name\)/,
+    /\["elevenlabs",\s*"minimax",\s*"kie"\]\.includes\(provider\.name\)/,
   );
   assert.match(source, /<option value=\{30\}>30 seconds<\/option>/);
 });
@@ -876,6 +877,46 @@ test("Eleven Music selection is experimental and requires its dedicated key", ()
   assert.equal(provider.model, "music_v2");
   assert.equal(provider.capabilities().masterGeneration, "EXPERIMENTAL");
   assert.equal(provider.capabilities().nativeMultitrack, false);
+});
+
+test("Kie.ai selection supports original songs and reference-audio covers", () => {
+  assert.throws(() => createProvider("kie"), /GENERATION_PROVIDER_UNAVAILABLE/);
+  const provider = createProvider("kie", { kieApiKey: "test-key" });
+  assert.ok(provider instanceof KieMusicProvider);
+  assert.equal(provider.name, "kie");
+  assert.equal(provider.model, "V6");
+  assert.equal(provider.capabilities().masterGeneration, "EXPERIMENTAL");
+  assert.equal(provider.capabilities().referenceAudio, true);
+});
+
+test("Kie.ai submits lyrics, polls the async task, and normalizes its master", async () => {
+  const original = globalThis.fetch,
+    plan = compose(createGenerationSchema.parse({ prompt: "warm reflective soul performance", durationSeconds: 12, outputMode: "MASTER_ONLY", lyrics: "[Verse]\nHold on to the light", instrumental: false })),
+    calls: Array<{url:string;init?:RequestInit}>=[];
+  globalThis.fetch=async(url,init)=>{calls.push({url:String(url),init});if(String(url).endsWith("/createTask"))return Response.json({data:{taskId:"kie-task-1"}});if(String(url).includes("/recordInfo"))return Response.json({data:{status:"SUCCESS",resultJson:JSON.stringify({response:{sunoData:[{id:"kie-track-1",title:"Hold On",audio_url:"https://cdn.example/hold-on.mp3",duration:12,model_name:"V6"}]}})}});return new Response(new Uint8Array([0x49,0x44,0x33]),{headers:{"content-type":"audio/mpeg"}})};
+  try{
+    const result=await new KieMusicProvider("secret-key","V6","https://api.kie.test","https://upload.kie.test",0).generate({jobId:"j",userId:"u",songId:"s",versionId:"v",compositionPlan:plan,lyrics:"[Verse]\nHold on to the light",seed:42,outputMode:"MASTER_ONLY"});
+    assert.equal(calls.length,3);
+    const body=JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.model,"ai-music-api/generate");
+    assert.equal(body.input.prompt,"[Verse]\nHold on to the light");
+    assert.equal(body.input.custom_mode,true);
+    assert.equal(result.assets[0].metadata.mimeType,"audio/mpeg");
+    assert.deepEqual(result.assets[0].audio.bytes,new Uint8Array([0x49,0x44,0x33]));
+    assert.equal(result.providerMetadata?.taskId,"kie-task-1");
+  }finally{globalThis.fetch=original}
+});
+
+test("Kie.ai uploads private source audio before starting a cover", async () => {
+  const original=globalThis.fetch,plan=compose(createGenerationSchema.parse({prompt:"new neo-soul cover",durationSeconds:12,outputMode:"MASTER_ONLY",lyrics:"Sing it again",instrumental:false})),calls:Array<{url:string;init?:RequestInit}>=[];
+  globalThis.fetch=async(url,init)=>{calls.push({url:String(url),init});if(String(url).includes("file-stream-upload"))return Response.json({data:{downloadUrl:"https://private-upload.example/source.wav"}});if(String(url).endsWith("/createTask"))return Response.json({data:{taskId:"kie-cover-1"}});if(String(url).includes("/recordInfo"))return Response.json({data:{status:"SUCCESS",response:{sunoData:[{id:"cover-1",title:"Owned Cover",audio_url:"https://cdn.example/cover.mp3",duration:12}]}}});return new Response(new Uint8Array([1,2,3]),{headers:{"content-type":"audio/mpeg"}})};
+  try{
+    const result=await new KieMusicProvider("secret-key","V6","https://api.kie.test","https://upload.kie.test",0).generateCover!({jobId:"j",userId:"u",songId:"s",versionId:"v",compositionPlan:plan,lyrics:"Sing it again",seed:42,outputMode:"MASTER_ONLY"},{sourceAssetId:"asset-1",sourceTitle:"Owned song",sourceAudio:new Uint8Array([82,73,70,70]),sourceMimeType:"audio/wav",sourceDurationSeconds:42,arrangement:"REFRESH",sourceAdherence:82,styleInfluence:55});
+    const taskBody=JSON.parse(String(calls[1].init?.body));
+    assert.equal(taskBody.model,"ai-music-api/upload-and-cover-audio");
+    assert.equal(taskBody.input.upload_url,"https://private-upload.example/source.wav");
+    assert.equal(result.assets[0].sourceAssetId,"asset-1");
+  }finally{globalThis.fetch=original}
 });
 
 test("Eleven Music sends a master-only v2 request and normalizes binary audio", async () => {

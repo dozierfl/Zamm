@@ -5,7 +5,7 @@ A music provider exposes health, capabilities, generate, and optional extend/rem
 ACE-Step 1.5 is wired only through its verified official task and audio endpoints. Dozi still boots and offers mock generation while ACE-Step is unavailable.
 # Provider contract
 
-`MusicGenerationProvider.generate(GenerationRequest)` returns `GenerationResult { assets: GeneratedAsset[] }`. Assets carry role, native/derived provenance, optional instrument/group, audio transport, alignment metadata, and provider metadata. Selection uses `MUSIC_PROVIDER=mock|ai-service|acestep|minimax|elevenlabs`.
+`MusicGenerationProvider.generate(GenerationRequest)` returns `GenerationResult { assets: GeneratedAsset[] }`. Assets carry role, native/derived provenance, optional instrument/group, audio transport, alignment metadata, and provider metadata. Selection uses `MUSIC_PROVIDER=mock|ai-service|acestep|minimax|elevenlabs|kie`.
 
 The FastAPI mock is started with `cd ai-service && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/uvicorn app.main:app --reload`. Configure `AI_SERVICE_BASE_URL` and optionally the same `AI_SERVICE_TOKEN` in both services.
 
@@ -16,3 +16,11 @@ Experimental Lego support is a separate `generateContextualTrack` provider opera
 For experimental local MiniMax Music 3 generation, run the dedicated native MLX service on port 8002, set `MINIMAX_BASE_URL=http://127.0.0.1:8002` for the AI gateway, and set `MUSIC_PROVIDER=minimax` for Dozi. The TypeScript provider calls the gateway's `/v1/minimax-generation` route; only the dedicated service imports `mlx_audio` and holds the model in memory. The gateway validates the returned PCM WAV and exposes a one-time authenticated transfer URL to the worker. `MINIMAX_MODEL` defaults to `MiniMax-Music3-mxfp8`, `MINIMAX_STEPS` defaults to 30, and `MINIMAX_TIMEOUT_SECONDS` defaults to 1800.
 
 The MiniMax provider supports `MASTER_ONLY` and is classified `EXPERIMENTAL`. It does not claim native multitrack output. Keep it opt-in until representative quality, longer-duration latency and memory, failure recovery, and current license/attribution requirements pass review.
+
+For Kie.ai full-song generation and reimagined covers, set `MUSIC_PROVIDER=kie`,
+`KIE_API_KEY`, and optionally `KIE_MODEL` (default `V6`). The adapter submits
+asynchronous Kie jobs, polls their status, downloads the selected master, and
+hands the bytes back to Dozi's normal private R2/version pipeline. Cover source
+audio is read from the authenticated Dozi library and uploaded only for the
+requested generation. Kie is `EXPERIMENTAL`, master-only, and requires the same
+rights confirmation shown for other hosted providers.
