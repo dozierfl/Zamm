@@ -1,5 +1,7 @@
 /* eslint-disable jsx-a11y/media-has-caption, jsx-a11y/label-has-associated-control -- generated audio has no dialogue; policy checkbox is nested in its visible label */
 "use client";
+import { planSong, vocalStyles, type VocalGender, type VocalStyle } from "../lib/song-planner";
+import { musicGenres } from "../lib/music-genres";
 import {
   FormEvent,
   useCallback,
@@ -562,6 +564,13 @@ export default function StudioApp() {
     [instrumental, setInstrumental] = useState(false),
     [lyrics, setLyrics] = useState(""),
     [songBpm, setSongBpm] = useState(76),
+    [autoTempo, setAutoTempo] = useState(true),
+    [autoKey, setAutoKey] = useState(true),
+    [songGenre, setSongGenre] = useState(""),
+    [feel, setFeel] = useState(""),
+    [style, setStyle] = useState(""),
+    [vocalGender, setVocalGender] = useState<VocalGender>("auto"),
+    [vocalStyle, setVocalStyle] = useState<VocalStyle>("Auto"),
     [songKey, setSongKey] = useState("F#"),
     [songScale, setSongScale] = useState<"major" | "minor">("minor"),
     [durationSeconds, setDurationSeconds] = useState(12),
@@ -647,6 +656,15 @@ export default function StudioApp() {
     () => (user ? qualityReviewStore[user.id] || {} : {}),
     [qualityReviewStore, user],
   );
+  const generationsPanel = useRef<HTMLElement | null>(null);
+  const previousNewestSong = useRef<string | null | undefined>(undefined);
+  const newestSongId = songs[0]?.id ?? null;
+  useEffect(() => {
+    if (previousNewestSong.current !== undefined && newestSongId !== previousNewestSong.current) {
+      generationsPanel.current?.scrollTo({ top: 0, behavior: "instant" });
+    }
+    previousNewestSong.current = newestSongId;
+  }, [newestSongId]);
   const audio = useRef<HTMLAudioElement | null>(null),
     pendingSongStart = useRef<number | null>(null),
     recorder = useRef<MediaRecorder | null>(null),
@@ -658,19 +676,10 @@ export default function StudioApp() {
     monitorSourceStream = useRef<MediaStream | null>(null),
     monitorContext = useRef<AudioContext | null>(null),
     monitorFrame = useRef<number | null>(null),
-    plan = useMemo(
-      () => ({
-        genre: prompt.toLowerCase().includes("soul")
-          ? "Neo-soul"
-          : "Alternative pop",
-        bpm: songBpm,
-        key: `${songKey} ${songScale}`,
-        mood: prompt.toLowerCase().includes("warm")
-          ? "Warm · Reflective"
-          : "Intimate · Hopeful",
-      }),
-      [prompt, songBpm, songKey, songScale],
-    ),
+    plan = useMemo(() => {
+      const composed = planSong({ prompt, style, genre: songGenre, feel, vocalGender, vocalStyle, instrumental, bpm: autoTempo ? undefined : songBpm, key: autoKey ? undefined : songKey, scale: autoKey ? undefined : songScale, durationSeconds });
+      return { ...composed, key: `${composed.key} ${composed.scale}`, mood: composed.mood.join(" · ") };
+    }, [prompt, style, songGenre, feel, vocalGender, vocalStyle, instrumental, songBpm, songKey, songScale, durationSeconds, autoTempo, autoKey]),
     activeVocalProfiles = useMemo(
       () =>
         profiles.filter(
@@ -746,6 +755,7 @@ export default function StudioApp() {
       )
       .then((d) => {
         const p = d.providers[0];
+        if (p?.name === "kie") setDurationSeconds(180);
         if (p)
           setProvider({
             name: p.name,
@@ -1023,9 +1033,13 @@ export default function StudioApp() {
             lyrics,
             instrumental,
             genre: plan.genre,
-            bpm: songBpm,
-            key: songKey,
-            scale: songScale,
+            feel,
+            style,
+            vocalGender,
+            vocalStyle,
+            bpm: autoTempo ? undefined : songBpm,
+            key: autoKey ? undefined : songKey,
+            scale: autoKey ? undefined : songScale,
             durationSeconds,
             providerPolicyAccepted,
             vocalProfileId: instrumental ? null : selectedVocalProfileId || null,
@@ -1670,7 +1684,7 @@ export default function StudioApp() {
     );
   if (!user) return <AuthGate onAuthenticated={setUser} />;
   return (
-    <div className="app-shell">
+    <div className={`app-shell${view === "create" ? " create-shell" : ""}`}>
       <aside className="rail">
         <div className="brand">
           <span>dz</span>
@@ -1775,7 +1789,7 @@ export default function StudioApp() {
         )}
         {view === "create" ? (
           <div className="workspace">
-            <section className="composer">
+            <section className="composer" aria-label="Song creation controls">
               <div className="mode-tabs">
                 {(["Simple", "Advanced"] as const).map((m) => (
                   <button
@@ -1797,6 +1811,12 @@ export default function StudioApp() {
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Describe the song you want to make…"
               />
+              <label className="field-label" htmlFor="song-style">STYLE & ARRANGEMENT <span>{style.length}/500</span></label>
+              <textarea id="song-style" value={style} maxLength={500} onChange={(event) => setStyle(event.target.value)} placeholder="Country ballad, acoustic guitar and pedal steel, intimate verse, soaring chorus. No drums until verse two…" />
+              <p className="creation-help">Describe instruments, groove, production, and how the song develops. Leave blank for an arrangement guided by your genre and song idea.</p>
+              <label className="field-label" htmlFor="create-genre">GENRE</label>
+              <input id="create-genre" list="song-genres" value={songGenre} placeholder={plan.genre} maxLength={80} onChange={(event) => setSongGenre(event.target.value)} />
+              <datalist id="song-genres">{musicGenres.map((genre) => <option key={genre} value={genre} />)}</datalist>
               <div className="toggle-row">
                 <div>
                   <strong>Instrumental</strong>
@@ -1813,6 +1833,11 @@ export default function StudioApp() {
               </div>
               {!instrumental && (
                 <>
+                  <div className="voice-direction-grid">
+                    <label>Vocal gender<select value={vocalGender} onChange={(event) => setVocalGender(event.target.value as VocalGender)}><option value="auto">Auto · follow style</option><option value="male">Male</option><option value="female">Female</option></select></label>
+                    <label>Singing style<select value={vocalStyle} onChange={(event) => setVocalStyle(event.target.value as VocalStyle)}>{vocalStyles.map((voice) => <option key={voice} value={voice}>{voice === "Auto" ? "Auto · match genre" : voice}</option>)}</select></label>
+                  </div>
+                  <p className="creation-help">These guide the generated performance. My Voice applies your selected private voice afterward.</p>
                   <div
                     className={`vocalist-selector ${selectedVocalProfileId ? "active" : ""}`}
                   >
@@ -1844,21 +1869,13 @@ export default function StudioApp() {
                   </div>
                   <div className="section-head">
                     <span>LYRICS</span>
-                    <button
-                      onClick={() =>
-                        setLyrics(
-                          "[Verse 1]\nThe road got quiet, but I kept the light\n\n[Chorus]\nPurpose finds us in its own sweet time",
-                        )
-                      }
-                    >
-                      Generate for me <Icon name="spark" />
-                    </button>
+                    <span>Optional · leave blank for automatic lyrics</span>
                   </div>
                   <textarea
                     className="lyrics"
                     value={lyrics}
                     onChange={(e) => setLyrics(e.target.value)}
-                    placeholder="Leave blank and Dozi will write lyrics, or add your own…"
+                    placeholder="Write your lyrics with [Verse], [Chorus], and [Bridge] tags. Leave blank for provider-written lyrics based on your song idea."
                   />
                   <VocalCastEditor
                     lyrics={lyrics}
@@ -1872,16 +1889,14 @@ export default function StudioApp() {
               {mode === "Advanced" && (
                 <div className="advanced-grid">
                   <label>
-                    Genre
-                    <input value={plan.genre} readOnly />
-                  </label>
-                  <label>
-                    BPM
+                    Tempo
+                    <select aria-label="Tempo mode" value={autoTempo ? "auto" : "custom"} onChange={(event) => setAutoTempo(event.target.value === "auto")}><option value="auto">Match genre / prompt</option><option value="custom">Set BPM</option></select>
                     <input
                       type="number"
                       min="40"
                       max="220"
-                      value={songBpm}
+                      value={autoTempo ? plan.bpm : songBpm}
+                      disabled={autoTempo}
                       onChange={(event) => {
                         const next = event.target.valueAsNumber;
                         if (Number.isFinite(next))
@@ -1891,7 +1906,8 @@ export default function StudioApp() {
                   </label>
                   <label>
                     Key
-                    <select
+                    <select aria-label="Key mode" value={autoKey ? "auto" : "custom"} onChange={(event) => setAutoKey(event.target.value === "auto")}><option value="auto">Let the music model choose</option><option value="custom">Set key</option></select>
+                    <select disabled={autoKey}
                       value={`${songKey}:${songScale}`}
                       onChange={(event) => {
                         const [nextKey, nextScale] = event.target.value.split(":");
@@ -1918,6 +1934,7 @@ export default function StudioApp() {
                       }
                     >
                       <option value={12}>12 seconds</option>
+                      {provider.name === "kie" && <><option value={120}>About 2 minutes</option><option value={180}>About 3 minutes</option><option value={240}>About 4 minutes</option><option value={360}>About 6 minutes</option></>}
                       {["elevenlabs", "minimax", "kie"].includes(provider.name) && (
                         <option value={30}>30 seconds</option>
                       )}
@@ -1925,6 +1942,7 @@ export default function StudioApp() {
                   </label>
                 </div>
               )}
+              {provider.name === "kie" && <p className="creation-help">With automatic lyrics, the provider chooses song length. With your own lyrics or an instrumental, duration is a target.</p>}
               <button
                 className="blueprint-toggle"
                 onClick={() => setBlueprint((v) => !v)}
@@ -1946,16 +1964,26 @@ export default function StudioApp() {
                   </div>
                   <div>
                     <small>TONALITY</small>
-                    <strong>{plan.key}</strong>
+                    <strong>{autoKey ? "Auto" : plan.key}</strong>
                   </div>
                   <div>
-                    <small>FEEL</small>
-                    <strong>{plan.mood}</strong>
+                    <label htmlFor="song-feel"><small>FEEL</small></label>
+                    <input
+                      id="song-feel"
+                      list="song-feels"
+                      value={feel}
+                      placeholder={plan.mood}
+                      maxLength={160}
+                      onChange={(event) => setFeel(event.target.value)}
+                    />
+                    <datalist id="song-feels">
+                      {["Warm and hopeful", "Joyful and uplifting", "Melancholic and intimate", "Energetic and bold", "Dreamy and atmospheric", "Dark and tense", "Peaceful and reflective"].map((value) => <option key={value} value={value} />)}
+                    </datalist>
                   </div>
                   <p>
                     <i />
-                    Sparse Rhodes and restrained pocket drums leave room for the
-                    final chorus to open up.
+                    {plan.instrumentation.length ? `${plan.instrumentation.map(item => item.instrument).join(" · ")}. ` : ""}
+                    {plan.structure[0]?.description}
                   </p>
                 </div>
               )}
@@ -2008,7 +2036,7 @@ export default function StudioApp() {
                 </p>
               )}
             </section>
-            <section className="results">
+            <section className="results" ref={generationsPanel} aria-label="Generations">
               <div className="results-head">
                 <div>
                   <h2>Generations</h2>

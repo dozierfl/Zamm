@@ -1,3 +1,4 @@
+import { audioRange } from "../../../../lib/audio-range";
 import { env } from "cloudflare:workers";
 import { getSql } from "../../../../db";
 import { apiError, requireUser } from "../../../../lib/auth";
@@ -23,17 +24,13 @@ export async function GET(
 
     const range = request.headers.get("range");
     if (range) {
-      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-      if (!match) return new Response("Invalid range", { status: 416 });
-      const start = match[1] ? Number(match[1]) : 0,
-        end = match[2]
-          ? Math.min(Number(match[2]), asset.fileSize - 1)
-          : asset.fileSize - 1;
-      if (start > end || start >= asset.fileSize)
+      const selectedRange = audioRange(range, asset.fileSize);
+      if (!selectedRange)
         return new Response(null, {
           status: 416,
           headers: { "content-range": `bytes */${asset.fileSize}` },
         });
+      const { start, end } = selectedRange;
       const object = await bindings.AUDIO.get(asset.storageKey, {
         range: { offset: start, length: end - start + 1 },
       });

@@ -3139,3 +3139,67 @@ textarea:focus {
   .export-actions { align-items: flex-start; min-width: 0; }
   .export-actions small { max-width: none; text-align: left; }
 }
+
+.blueprint input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #555);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+/* Create has two independent panes above the persistent player. */
+@media (min-width: 721px) {
+  .create-shell {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .create-shell > main {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .create-shell .topbar,
+  .create-shell .operation-status {
+    flex-shrink: 0;
+  }
+  .create-shell .workspace {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .create-shell .composer,
+  .create-shell .results {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+  }
+  .create-shell .results {
+    overflow-anchor: none;
+  }
+}
+
+.creation-help {
+  color: var(--muted, #aaa);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 20px;
+}
+.voice-direction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.voice-direction-grid label { display: grid; gap: 8px; font-size: 12px; }
+.voice-direction-grid select, #create-genre {
+  width: 100%; min-width: 0; padding: 10px;
+  background: #151713; color: #eee; border: 1px solid var(--line); border-radius: 8px;
+}
+#song-style { min-height: 110px; }

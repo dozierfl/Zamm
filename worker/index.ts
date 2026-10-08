@@ -17,6 +17,8 @@ interface Env {
   MINIMAX_MODEL?: string;
   ELEVENLABS_API_KEY?: string;
   ELEVENLABS_MODEL?: string;
+  KIE_API_KEY?: string;
+  KIE_MODEL?: string;
   GENERATION_QUEUE: Queue<{ generationJobId: string }>;
   AUDIO: R2Bucket;
   IMAGES: {
@@ -56,7 +58,7 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
-  async queue(batch:MessageBatch<{generationJobId:string}>,env:Env):Promise<void>{const orchestrator=new GenerationOrchestrator(getSql(env.DATABASE_URL),new R2AudioStorage(env.AUDIO),name=>createProvider(name,{aiServiceBaseUrl:env.AI_SERVICE_BASE_URL,aiServiceToken:env.AI_SERVICE_TOKEN,aceStepModel:env.ACESTEP_MODEL,minimaxModel:env.MINIMAX_MODEL,elevenLabsApiKey:env.ELEVENLABS_API_KEY,elevenLabsModel:env.ELEVENLABS_MODEL}),env.AI_SERVICE_BASE_URL?new HttpVocalIdentityProcessor(env.AI_SERVICE_BASE_URL,env.AI_SERVICE_TOKEN):undefined);for(const message of batch.messages){try{await orchestrator.process(message.body.generationJobId);message.ack()}catch(error){const retryable=error instanceof Error&&!error.message.includes("MASTER_ASSET_REQUIRED")&&!error.message.includes("PROVIDER_UNAVAILABLE");if(retryable)message.retry();else message.ack()}}},
+  async queue(batch:MessageBatch<{generationJobId:string}>,env:Env):Promise<void>{const orchestrator=new GenerationOrchestrator(getSql(env.DATABASE_URL),new R2AudioStorage(env.AUDIO),name=>createProvider(name,{aiServiceBaseUrl:env.AI_SERVICE_BASE_URL,aiServiceToken:env.AI_SERVICE_TOKEN,aceStepModel:env.ACESTEP_MODEL,minimaxModel:env.MINIMAX_MODEL,elevenLabsApiKey:env.ELEVENLABS_API_KEY,elevenLabsModel:env.ELEVENLABS_MODEL,kieApiKey:env.KIE_API_KEY,kieModel:env.KIE_MODEL}),env.AI_SERVICE_BASE_URL?new HttpVocalIdentityProcessor(env.AI_SERVICE_BASE_URL,env.AI_SERVICE_TOKEN):undefined);for(const message of batch.messages){try{await orchestrator.process(message.body.generationJobId);message.ack()}catch(error){const retryable=error instanceof Error&&!error.message.includes("MASTER_ASSET_REQUIRED")&&!error.message.includes("PROVIDER_UNAVAILABLE");if(retryable)message.retry();else message.ack()}}},
 };
 
 export default worker;

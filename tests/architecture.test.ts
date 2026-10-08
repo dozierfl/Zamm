@@ -134,9 +134,9 @@ test("advanced tempo and tonality overrides reach the composition plan", async (
   assert.equal(plan.scale, "minor");
   assert.match(plan.generationCaption, /82 BPM, E minor/);
   const studio = await readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8");
-  assert.match(studio, /bpm: songBpm/);
-  assert.match(studio, /key: songKey/);
-  assert.match(studio, /scale: songScale/);
+  assert.match(studio, /bpm: autoTempo \? undefined : songBpm/);
+  assert.match(studio, /key: autoKey \? undefined : songKey/);
+  assert.match(studio, /scale: autoKey \? undefined : songScale/);
   assert.doesNotMatch(studio, /key: "F#"/);
 });
 test("song creation can select an owner-scoped immutable vocalist version", async () => {
@@ -1234,4 +1234,11 @@ test("remote vocalist permission uses a private expiring link with no recipient 
   assert.doesNotMatch(publicRoute, /requireUser/);
   assert.match(page, /No account or password is required/);
   assert.match(studio, /Create phone permission link/);
+});
+
+test("background generation forwards Kie credentials and model to the provider", async () => {
+  const source = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
+  const queueHandler = source.slice(source.indexOf("async queue("));
+  assert.match(queueHandler, /kieApiKey:\s*env\.KIE_API_KEY/);
+  assert.match(queueHandler, /kieModel:\s*env\.KIE_MODEL/);
 });
