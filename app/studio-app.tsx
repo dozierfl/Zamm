@@ -1716,6 +1716,14 @@ export default function StudioApp() {
           </button>
         </nav>
         <div className="rail-bottom">
+          <a
+            className="source-link"
+            href="https://github.com/dozierfl/Zamm"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Source
+          </a>
           <button
             className="avatar"
             aria-label="Sign out"
