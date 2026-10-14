@@ -5,6 +5,8 @@ Repository: `dozierfl/Zamm`
 Audited revision: `7bdef15` (`main`)  
 Assessment scope: architecture, data model, API surface, storage, async work, security, tests, AI feasibility, and the migration path to the Dozi Voice Engine specification.
 
+License decision: Dozi is licensed under `AGPL-3.0-only`. This resolves the open-source versus proprietary application-code question. Third-party model weights, datasets, hosted services, and other artifacts still require individual license and terms review.
+
 ## Executive conclusion
 
 The repository is a credible beta foundation, not a prototype that should be replaced. It already has durable users, sessions, songs, immutable song versions, normalized audio assets, version-to-asset lineage, Cloudflare Queue generation, PostgreSQL, R2, a provider-neutral music gateway, private voice enrollment, RVC-based voice conversion, BS-RoFormer separation, non-destructive mixing, aligned-track replacement, phrase repair, cover generation, and owner-scoped audio delivery.
@@ -304,7 +306,7 @@ Run queue chaos/restart tests, load tests, storage reconciliation, recovery dril
 Only four decisions materially affect the foundation:
 
 1. **Deployment topology:** keep the recommended Cloudflare app + PostgreSQL/R2/Queue + separately deployed AI worker, or move all services to one private host. The current code strongly favors the recommended hybrid.
-2. **Commercial licensing posture:** whether Dozi will remain open source/GPL-compatible or proprietary. This directly affects Seed-VC integration and Rubber Band distribution.
+2. **Commercial licensing posture:** resolved as `AGPL-3.0-only` for Dozi application code. Seed-VC and Rubber Band are now directionally compatible at the application-code level, but their exact integration boundaries and all model/checkpoint licenses still require an artifact-specific review.
 3. **Collaboration ownership:** whether projects are owned by one user and shared to teams, or owned directly by teams. Recommendation: user-owned personal projects plus optional team ownership, represented explicitly.
 4. **Voice-artifact residency:** local-only studio models versus encrypted cloud-managed artifacts. Recommendation: support both through one artifact interface, with cloud-managed encrypted storage as the collaboration path.
 

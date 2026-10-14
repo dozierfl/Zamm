@@ -1,5 +1,11 @@
 # Dozi Music Studio
 
+## License
+
+Dozi Music Studio is licensed under the [GNU Affero General Public License version 3](LICENSE), identified by the SPDX expression `AGPL-3.0-only`.
+
+If you modify Dozi and let users interact with the modified software over a network, those users must be offered the corresponding source code as required by section 13 of the license. This repository's license does not change the ownership or licensing of user-provided songs, lyrics, recordings, voice data, or generated audio. Third-party models, checkpoints, datasets, services, and bundled components remain subject to their own licenses and terms.
+
 Dozi supports an optional official ACE-Step 1.5 provider through its FastAPI AI gateway. Mock generation remains the default. See [ACE-Step capabilities](docs/ACESTEP_CAPABILITIES.md) and [local development](docs/LOCAL_DEVELOPMENT.md) for the verified service architecture and startup sequence.
 
 The current product path is master-based. Contextual tracks and source separation remain bounded R&D capabilities; they are not advertised as pristine stems or a dependable multitrack foundation. See [ADR 0003](docs/decisions/0003-contextual-tracks-and-separation-product-boundary.md).

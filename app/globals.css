@@ -162,6 +162,20 @@ svg {
 .rail-bottom {
   margin-top: auto;
   padding-bottom: 22px;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+}
+.source-link {
+  color: #8d8f8b;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.source-link:hover,
+.source-link:focus-visible {
+  color: var(--lime);
 }
 .avatar {
   width: 35px;
