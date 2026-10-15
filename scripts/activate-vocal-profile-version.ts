@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { getSql } from "../db";
 
 function option(name: string) {
@@ -11,6 +11,33 @@ function option(name: string) {
 async function sha256(path: string) {
   const bytes = await readFile(path);
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function resolveRvcRoot(modelPath: string, indexPath: string, configured?: string) {
+  if (configured) {
+    const root = resolve(configured),
+      modelRelative = relative(root, modelPath),
+      indexRelative = relative(root, indexPath);
+    if (
+      modelRelative.startsWith(`..${sep}`) ||
+      indexRelative.startsWith(`..${sep}`) ||
+      modelRelative === ".." ||
+      indexRelative === ".."
+    ) throw new Error("Model and index must remain inside the configured RVC root.");
+    return root;
+  }
+  let candidate = dirname(modelPath);
+  while (candidate !== dirname(candidate)) {
+    try {
+      await stat(resolve(candidate, "infer/cli.py"));
+      const indexRelative = relative(candidate, indexPath);
+      if (!indexRelative.startsWith(`..${sep}`) && indexRelative !== "..") return candidate;
+    } catch {
+      // Continue toward the filesystem root until the RVC CLI is found.
+    }
+    candidate = dirname(candidate);
+  }
+  throw new Error("Could not identify the private RVC model root. Pass --rvc-root.");
 }
 
 const profileSelector = option("--profile"),
@@ -31,7 +58,11 @@ if (
     "Usage: npm run vocal:activate-version -- --profile <name-or-id> --version <number> --manifest <path> --model <path> --index <path>",
   );
 
-await Promise.all([stat(manifestPath), stat(modelPath), stat(indexPath)]);
+const [manifestStat, modelStat, indexStat] = await Promise.all([
+  stat(manifestPath),
+  stat(modelPath),
+  stat(indexPath),
+]);
 
 const projectRoot = resolve(import.meta.dirname, ".."),
   variables = Object.fromEntries(
@@ -64,7 +95,14 @@ if (!manifest.profile.verifiedAt)
 if (!/^[a-f0-9]{64}$/.test(manifest.sourceManifestChecksum))
   throw new Error("The training manifest checksum is invalid.");
 
-const [modelChecksum, indexChecksum] = await Promise.all([
+const rvcRoot = await resolveRvcRoot(
+    modelPath,
+    indexPath,
+    option("--rvc-root") || variables.DOZI_RVC_ROOT || process.env.DOZI_RVC_ROOT,
+  ),
+  modelProviderRef = relative(rvcRoot, modelPath),
+  indexProviderRef = relative(rvcRoot, indexPath),
+  [modelChecksum, indexChecksum] = await Promise.all([
     sha256(modelPath),
     sha256(indexPath),
   ]),
@@ -79,7 +117,7 @@ const [modelChecksum, indexChecksum] = await Promise.all([
     batchSize: 4,
     precision: "float32",
     trainingDevice: "CPU",
-    retrievalIndexRef: indexPath,
+    retrievalIndexRef: indexProviderRef,
     retrievalIndexChecksum: indexChecksum,
     modelChecksum,
   },
@@ -145,7 +183,7 @@ try {
       if (
         recorded.provider !== manifest.provider ||
         recorded.providerModel !== manifest.providerModel ||
-        recorded.providerModelRef !== modelPath ||
+        recorded.providerModelRef !== modelProviderRef ||
         recorded.sourceManifestChecksum !== manifest.sourceManifestChecksum
       )
         throw new Error(
@@ -159,12 +197,49 @@ try {
           validation_metrics
         ) values(
           ${profile.id},${versionNumber},'READY',false,${manifest.provider},
-          ${manifest.providerModel},${modelPath},${manifest.sourceManifestChecksum},
+          ${manifest.providerModel},${modelProviderRef},${manifest.sourceManifestChecksum},
           ${tx.json(trainingConfig)},${tx.json(validationMetrics)}
         ) returning id
       `;
       versionId = inserted[0].id;
     }
+
+    await tx`
+      insert into voice_model_artifacts(
+        profile_version_id,kind,storage_key,provider_ref,checksum,file_size,metadata
+      ) values(
+        ${versionId},'CHECKPOINT',${`local-rvc/${profile.id}/${versionId}/checkpoint/${modelChecksum}.pth`},
+        ${modelProviderRef},${modelChecksum},${modelStat.size},
+        ${tx.json({ storage: "MANAGED_LOCAL_RVC", rootRelative: true })}
+      )
+      on conflict(profile_version_id,kind,checksum) do update set
+        provider_ref=excluded.provider_ref,file_size=excluded.file_size,
+        metadata=excluded.metadata,deleted_at=null
+    `;
+    await tx`
+      insert into voice_model_artifacts(
+        profile_version_id,kind,storage_key,provider_ref,checksum,file_size,metadata
+      ) values(
+        ${versionId},'INDEX',${`local-rvc/${profile.id}/${versionId}/index/${indexChecksum}.index`},
+        ${indexProviderRef},${indexChecksum},${indexStat.size},
+        ${tx.json({ storage: "MANAGED_LOCAL_RVC", rootRelative: true })}
+      )
+      on conflict(profile_version_id,kind,checksum) do update set
+        provider_ref=excluded.provider_ref,file_size=excluded.file_size,
+        metadata=excluded.metadata,deleted_at=null
+    `;
+    await tx`
+      insert into voice_model_artifacts(
+        profile_version_id,kind,storage_key,provider_ref,checksum,file_size,metadata
+      ) values(
+        ${versionId},'MANIFEST',${`local-training/${profile.id}/${versionId}/${manifest.sourceManifestChecksum}.json`},
+        ${manifestPath},${await sha256(manifestPath)},${manifestStat.size},
+        ${tx.json({ storage: "PRIVATE_LOCAL_TRAINING", sourceManifestChecksum: manifest.sourceManifestChecksum })}
+      )
+      on conflict(profile_version_id,kind,checksum) do update set
+        provider_ref=excluded.provider_ref,file_size=excluded.file_size,
+        metadata=excluded.metadata,deleted_at=null
+    `;
 
     await tx`
       update vocal_profile_versions set is_active=false

@@ -14,7 +14,13 @@ export async function GET(request: Request) {
         p.consented_at as "consentedAt",p.verified_at as "verifiedAt",
         p.usable_singing_seconds as "usableSingingSeconds",p.quality_score as "qualityScore",
         v.id as "activeVersionId",v.version_number as "activeVersionNumber",
-        v.provider,v.provider_model as "providerModel"
+        v.provider,v.provider_model as "providerModel",
+        (select count(*)::int from voice_model_artifacts a
+          where a.profile_version_id=v.id and a.deleted_at is null) as "artifactCount",
+        (exists(select 1 from voice_model_artifacts a where a.profile_version_id=v.id
+          and a.kind='CHECKPOINT' and a.deleted_at is null)
+          and exists(select 1 from voice_model_artifacts a where a.profile_version_id=v.id
+          and a.kind='INDEX' and a.deleted_at is null)) as "managedModel"
       from artist_vocal_profiles p
       left join vocal_profile_versions v on v.profile_id=p.id and v.is_active=true
       where p.owner_id=${user.id} and p.revoked_at is null

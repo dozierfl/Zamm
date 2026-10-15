@@ -12,6 +12,8 @@ import {
 } from "../lib/providers.ts";
 import { InlineTestGenerationQueue } from "../lib/generation-queue.ts";
 import { validateElevenLabsPolicy } from "../lib/provider-policy.ts";
+import { InlineVoiceConversionQueue } from "../lib/voice-conversion-queue.ts";
+import { RvcVoiceProvider, createVoiceProvider } from "../lib/voice-provider.ts";
 test("generation options accept nested JSON and reject non-JSON values", () => {
   const input = { prompt: "warm reflective soul performance" };
   const defaults = createGenerationSchema.parse(input);
@@ -1291,5 +1293,107 @@ test("Phase 1 foundation is additive, durable, and owner scoped", async () => {
   assert.match(shell, /fetch\("\/api\/voice-library"/);
   assert.match(shell, /Audio & voice library/);
   assert.match(shell, /Arrangement editor shell/);
-  assert.match(shell, /Processing & editor/);
+  assert.match(shell, /Voice conversion/);
+});
+
+test("Phase 2 voice conversion uses a provider boundary and server-side preview cap", async () => {
+  const original = globalThis.fetch;
+  const requestBodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return Response.json({
+      assets: [{
+        assetKey: "artist-voice-master",
+        role: "MASTER",
+        provenance: "RENDERED",
+        isPrimary: true,
+        sortOrder: 0,
+        audio: { base64: "AQI=" },
+        metadata: {
+          mimeType: "audio/wav",
+          codec: "pcm_s16le",
+          sampleRate: 48000,
+          bitDepth: 16,
+          channels: 2,
+          durationSeconds: 1,
+          checksum: "0".repeat(64),
+          waveformData: [],
+        },
+      }],
+    });
+  };
+  try {
+    const provider = new RvcVoiceProvider("http://voice.local", "secret"),
+      request = {
+        jobId: "job",
+        profileId: "profile",
+        profileVersionId: "version",
+        modelRef: "assets/weights/voice.pth",
+        indexRef: "assets/indices/voice.index",
+        source: {
+          assetKey: "source",
+          role: "MASTER" as const,
+          provenance: "UPLOADED" as const,
+          isPrimary: true,
+          sortOrder: 0,
+          audio: { bytes: new Uint8Array([1, 2]) },
+          metadata: {
+            mimeType: "audio/wav",
+            codec: "pcm_s16le",
+            sampleRate: 48000,
+            bitDepth: 16,
+            channels: 2,
+            durationSeconds: 60,
+            checksum: "0".repeat(64),
+            waveformData: [],
+          },
+        },
+        voiceIdentityStrength: 80,
+        mode: "PREVIEW" as const,
+      };
+    await provider.preview(request);
+    await provider.convert({ ...request, mode: "FULL" });
+    assert.equal(requestBodies[0].previewDurationSeconds, 30);
+    assert.equal("previewDurationSeconds" in requestBodies[1], false);
+    assert.throws(
+      () => createVoiceProvider("unknown", { aiServiceBaseUrl: "http://voice.local" }),
+      /VOICE_PROVIDER_UNSUPPORTED/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("Phase 2 voice conversion is durable, private, and owner scoped", async () => {
+  const [schema, migration, route, statusRoute, worker, service, studio] = await Promise.all([
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle-pg/0010_absurd_big_bertha.sql", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/voice-conversions/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/voice-conversions/[id]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../ai-service/app/main.py", import.meta.url), "utf8"),
+    readFile(new URL("../app/voice-studio.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(schema, /export const voiceConversionRuns=/);
+  assert.match(migration, /CREATE TABLE "voice_conversion_runs"/);
+  assert.match(migration, /ALTER COLUMN "provider_ref" SET NOT NULL/);
+  assert.match(route, /requireProjectRole\([^)]*"VOCALIST"\)/);
+  assert.match(route, /p\.owner_id=\$\{user\.id\}/);
+  assert.match(route, /rightsAttested/);
+  assert.match(route, /VOICE_CONVERSION_SOURCE/);
+  assert.match(statusRoute, /j\.owner_id=\$\{user\.id\}/);
+  assert.match(worker, /voiceConversionJobId/);
+  assert.match(service, /previewDurationSeconds:float\|None=Field\(default=None,ge=1,le=30\)/);
+  assert.match(studio, /Create 30-second preview/);
+  assert.match(studio, /Results remain private and non-destructive/);
+});
+
+test("local voice conversion queue executes independently of status polling", async () => {
+  let delivered = "";
+  const queue = new InlineVoiceConversionQueue(async (id) => {
+    delivered = id;
+  });
+  await queue.enqueue("voice-job-1");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(delivered, "voice-job-1");
 });

@@ -37,7 +37,7 @@ class IdentityVerificationRequest(VocalAnalysisRequest):expectedPhrase:str
 class PhraseRepairRequest(BaseModel):
     sourceAudioBase64:str;replacementAudioBase64:str;startSeconds:float=Field(ge=0);endSeconds:float=Field(gt=0);crossfadeMs:int=Field(default=80,ge=0,le=500)
 class ArtistVocalRequest(BaseModel):
-    jobId:str;profileId:str;profileVersionId:str;modelRef:str;indexRef:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str;voiceIdentityStrength:float=Field(default=100,ge=0,le=100)
+    jobId:str;profileId:str;profileVersionId:str;modelRef:str;indexRef:str;sourceMimeType:str="audio/wav";sourceAudioBase64:str;voiceIdentityStrength:float=Field(default=100,ge=0,le=100);previewDurationSeconds:float|None=Field(default=None,ge=1,le=30)
 
 SEPARATOR_STEMS=("vocals","drums","bass","guitar","piano","other")
 separation_jobs:dict[str,dict[str,Any]]={}
@@ -234,7 +234,7 @@ async def artist_vocal_conversion(request:ArtistVocalRequest,authorization:str|N
         model=resolve_rvc_artifact(request.modelRef,rvc["root"],".pth")
         index=resolve_rvc_artifact(request.indexRef,rvc["root"],".index")
         async with local_compute_scheduler.reserve("voice_conversion",request.jobId) as target:
-            rendered=await asyncio.to_thread(render_artist_vocal,source,model_path=model,index_path=index,rvc_root=rvc["root"],separator_binary=separator["binary"],separator_models=separator["models"],separator_model=separator["model"],separator_device=separator["device"],voice_identity_strength=request.voiceIdentityStrength,compute_environment=rvc["compute"].environment(),compute_metadata=target.metadata())
+            rendered=await asyncio.to_thread(render_artist_vocal,source,model_path=model,index_path=index,rvc_root=rvc["root"],separator_binary=separator["binary"],separator_models=separator["models"],separator_model=separator["model"],separator_device=separator["device"],voice_identity_strength=request.voiceIdentityStrength,maximum_duration_seconds=request.previewDurationSeconds,compute_environment=rvc["compute"].environment(),compute_metadata=target.metadata())
     except ValueError as exc:
         raise HTTPException(422,detail={"code":str(exc),"retryable":False}) from None
     except subprocess.TimeoutExpired:
@@ -279,7 +279,7 @@ async def health():return{"status":"ready","gatewayAvailable":True,"compute":{**
 async def compute():return{**compute_capabilities(),"scheduler":local_compute_scheduler.status(),"hardware":hardware_profile(),"audioClassification":classifier_status()}
 @app.get("/capabilities")
 async def capabilities(authorization:str|None=Header(default=None)):
-    authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"integrated-for-owned-songs","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"DEVELOPMENT" if separator_available() else "UNAVAILABLE","aceStep":state}
+    authorize(authorization);state=await AceStepClient(settings()).health();return{"provider":"ace-step-1.5","available":state["ready"],"textToMusic":True,"lyrics":True,"instrumental":True,"bpm":True,"keyScale":True,"timeSignature":True,"seed":True,"batchAlternatives":True,"referenceAudio":"integrated-for-lego","cover":"integrated-for-owned-songs","repaint":"supported-not-integrated","extract":"base-model-not-integrated","lego":"integrated-experimental-base-model","legoTargets":sorted(LEGO_TARGETS),"complete":"base-model-not-integrated","nativeMultitrack":False,"masterGeneration":"EXPERIMENTAL","contextualRegeneration":"EXPERIMENTAL","sourceSeparation":"DEVELOPMENT" if separator_available() else "UNAVAILABLE","voiceIdentity":{"available":vocal_identity_available(),"engine":"rvc-v2","singingVoiceConversion":True,"preview":True,"returnsIsolatedVocal":True,"training":"CLI_MANAGED"},"aceStep":state}
 @app.post("/v1/ace-step-generation",response_model=Result)
 async def ace_generate(request:Request,authorization:str|None=Header(default=None)):
     authorize(authorization);cfg=settings();payload=AceStepRequestTranslator(cfg).translate(request);started=time.monotonic();logger.info(json.dumps({"event":"ace_step_started","jobId":request.jobId,"provider":"ace-step-1.5","model":payload["model"]}))

@@ -81,7 +81,9 @@ def test_artist_vocal_endpoint_returns_master_and_editable_vocal(tmp_path:Path,m
     with wave.open(audio,"wb") as wav:
         wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(16000);wav.writeframes(b"\0\0"*16000)
     metadata={"mimeType":"audio/wav","codec":"pcm_s16le","sampleRate":16000,"bitDepth":16,"channels":1,"durationSeconds":1.0,"checksum":"0"*64,"waveformData":[0.0]*96}
-    def fake_render(*_args,**_kwargs):
+    render_options={}
+    def fake_render(*_args,**kwargs):
+        render_options.update(kwargs)
         return {"master":{"bytes":audio.getvalue(),"metadata":metadata},"vocal":{"bytes":audio.getvalue(),"metadata":metadata},"processing":{"voiceModel":"voice.pth","retrievalIndex":"voice.index"}}
     monkeypatch.setattr("app.main.render_artist_vocal",fake_render)
     import base64
@@ -90,3 +92,8 @@ def test_artist_vocal_endpoint_returns_master_and_editable_vocal(tmp_path:Path,m
     data=response.json();assert [asset["role"] for asset in data["assets"]]==["MASTER","NATIVE_TRACK"]
     assert data["assets"][1]["instrumentGroup"]=="VOCALS"
     assert data["providerMetadata"]["profileVersionId"]=="v"
+    assert render_options["maximum_duration_seconds"] is None
+
+    preview=client.post("/v1/artist-vocal-conversion",json={"jobId":"preview","profileId":"p","profileVersionId":"v","modelRef":str(model),"indexRef":str(index),"sourceMimeType":"audio/wav","sourceAudioBase64":base64.b64encode(audio.getvalue()).decode(),"previewDurationSeconds":30})
+    assert preview.status_code==200
+    assert render_options["maximum_duration_seconds"]==30
