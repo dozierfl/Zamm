@@ -2007,6 +2007,198 @@ textarea:focus {
   margin: auto;
   padding: 48px 36px;
 }
+.voice-studio {
+  min-height: calc(100vh - 84px);
+  padding: 22px 24px 86px;
+  background: #0b0c09;
+}
+.voice-studio-heading {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+.voice-studio-heading p,
+.voice-studio-project label,
+.panel-title,
+.voice-lane header small {
+  color: #898c84;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.voice-studio-heading p { color: var(--lime); }
+.voice-studio-heading h2 {
+  margin: 5px 0 0;
+  font: 400 28px/1.1 Georgia, serif;
+}
+.voice-studio-project {
+  display: grid;
+  gap: 6px;
+  min-width: 240px;
+}
+.voice-studio-project select,
+.voice-project-create input {
+  width: 100%;
+  color: #f2f2ee;
+  background: #121410;
+  border: 1px solid #30342a;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.voice-studio-error {
+  color: #ff9a7d;
+  margin: 0 0 12px;
+}
+.voice-studio-grid {
+  min-height: 570px;
+  display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(420px, 1fr) minmax(210px, 260px);
+  border: 1px solid #30342a;
+  border-radius: 14px 14px 0 0;
+  overflow: hidden;
+  background: #10110e;
+}
+.voice-studio-library,
+.voice-processing-panel {
+  padding: 16px;
+  background: #181a16;
+}
+.voice-studio-library { border-right: 1px solid #30342a; }
+.voice-processing-panel { border-left: 1px solid #30342a; }
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #30342a;
+}
+.panel-title span { color: #f2f2ee; }
+.voice-project-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  margin: 14px 0;
+}
+.voice-project-create button,
+.voice-processing-panel button {
+  border: 1px solid #3b3e34;
+  border-radius: 7px;
+  color: #dfe3d5;
+  background: #22241f;
+  padding: 9px 11px;
+}
+.voice-project-create button:not(:disabled) { color: #111; background: var(--lime); }
+.voice-library-list { display: grid; gap: 8px; }
+.voice-library-list article {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #30342a;
+  border-radius: 9px;
+  background: #11120f;
+}
+.voice-library-list article > i {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #293019;
+  color: var(--lime);
+  font-style: normal;
+}
+.voice-library-list article div { display: grid; gap: 3px; min-width: 0; }
+.voice-library-list article strong { font-size: 11px; }
+.voice-library-list article span,
+.voice-library-list > p,
+.voice-processing-panel p { color: #898c84; font-size: 10px; line-height: 1.5; }
+.voice-library-list article em {
+  color: #a8aaa3;
+  font-size: 8px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+.voice-library-list article em.verified { color: var(--lime); }
+.voice-arrangement-shell {
+  position: relative;
+  padding: 0 14px 80px;
+  overflow: hidden;
+  background: linear-gradient(90deg, transparent 24.8%, #1e211b 25%, transparent 25.2%, transparent 49.8%, #1e211b 50%, transparent 50.2%, transparent 74.8%, #1e211b 75%, transparent 75.2%);
+}
+.arrangement-ruler {
+  height: 38px;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  align-items: center;
+  color: #676a63;
+  font-size: 9px;
+  border-bottom: 1px solid #30342a;
+}
+.voice-lane {
+  min-height: 90px;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  border-bottom: 1px solid #282b24;
+}
+.voice-lane header {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px;
+  background: rgba(24, 26, 22, 0.85);
+  border-right: 1px solid #30342a;
+}
+.voice-lane header strong { font-size: 11px; }
+.voice-lane > div { display: grid; place-items: center; }
+.voice-lane > div span { color: #555851; font-size: 10px; }
+.voice-studio-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding-top: 50px;
+  color: #a7aaa1;
+}
+.voice-studio-empty span { color: #676a63; font-size: 11px; }
+.voice-processing-panel dl { display: grid; gap: 0; margin: 14px 0 18px; }
+.voice-processing-panel dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #30342a;
+  font-size: 10px;
+}
+.voice-processing-panel dt { color: #898c84; }
+.voice-processing-panel dd { margin: 0; color: #e3e5df; text-align: right; }
+.voice-processing-panel button { width: 100%; margin-top: 8px; }
+.voice-processing-panel button.render { color: #596044; background: #22271a; }
+.voice-studio-transport {
+  display: grid;
+  grid-template-columns: auto auto auto auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 0 16px;
+  border: 1px solid #30342a;
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  background: #181a16;
+  color: #a2a59d;
+  font-size: 10px;
+}
+.voice-studio-transport button {
+  border: 0;
+  background: none;
+  color: #686b63;
+}
+.voice-studio-transport i { height: 2px; background: #30342a; }
 .voice-intro {
   max-width: 620px;
 }
@@ -2976,7 +3168,7 @@ textarea:focus {
     justify-content: space-around;
   }
   .rail nav button {
-    width: 33.33%;
+    width: 25%;
   }
   .topbar {
     padding: 0 18px;
@@ -3046,9 +3238,20 @@ textarea:focus {
   }
   .library-view,
   .voice-view,
+  .voice-studio,
   .tracks-view {
     padding: 22px 18px;
   }
+  .voice-studio { padding-bottom: 86px; }
+  .voice-studio-heading { align-items: stretch; flex-direction: column; }
+  .voice-studio-project { min-width: 0; }
+  .voice-studio-grid { display: block; min-height: 0; }
+  .voice-studio-library,
+  .voice-processing-panel { border: 0; border-bottom: 1px solid #30342a; }
+  .voice-arrangement-shell { min-height: 430px; overflow-x: auto; }
+  .voice-studio-transport { grid-template-columns: auto auto auto 1fr; }
+  .voice-studio-transport span:last-child,
+  .voice-studio-transport span:nth-last-child(2) { display: none; }
   .profile-create {
     grid-template-columns: 1fr;
   }

@@ -2,6 +2,7 @@
 "use client";
 import { planSong, vocalStyles, type VocalGender, type VocalStyle } from "../lib/song-planner";
 import { musicGenres } from "../lib/music-genres";
+import { VoiceStudio } from "./voice-studio";
 import {
   FormEvent,
   useCallback,
@@ -347,6 +348,7 @@ const paths: Record<string, string> = {
   library: "M4 5v14M9 5v14M14 7v12M19 4v15",
   voice:
     "M12 2a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V6a4 4 0 0 0-4-4Zm-7 10a7 7 0 0 0 14 0M12 19v3M8 22h8",
+  studio: "M3 6h18M6 6v12M18 6v12M3 18h18M9 10h6M9 14h6",
   play: "m9 7 8 5-8 5V7Z",
   pause: "M9 7v10M15 7v10",
   heart:
@@ -554,7 +556,7 @@ export default function StudioApp() {
       available: false,
       masterGeneration: "UNAVAILABLE",
     }),
-    [view, setView] = useState<"create" | "library" | "tracks" | "voice">(
+    [view, setView] = useState<"create" | "library" | "tracks" | "voice" | "voice-studio">(
       "create",
     ),
     [mode, setMode] = useState<"Simple" | "Advanced">("Simple"),
@@ -1714,6 +1716,13 @@ export default function StudioApp() {
             <Icon name="voice" />
             <span>My Voice</span>
           </button>
+          <button
+            className={view === "voice-studio" ? "active" : ""}
+            onClick={() => setView("voice-studio")}
+          >
+            <Icon name="studio" />
+            <span>Voice Studio</span>
+          </button>
         </nav>
         <div className="rail-bottom">
           <a
@@ -1745,7 +1754,9 @@ export default function StudioApp() {
                   ? "Your library"
                   : view === "tracks"
                     ? "Multitrack workspace"
-                    : "Artist voice"}
+                    : view === "voice-studio"
+                      ? "Voice Studio"
+                      : "Artist voice"}
             </h1>
           </div>
           <div className="provider" title={provider.model}>
@@ -2295,6 +2306,8 @@ export default function StudioApp() {
               />
             ) : null}
           </section>
+        ) : view === "voice-studio" ? (
+          <VoiceStudio />
         ) : (
           <section className="voice-view">
             <div className="voice-intro">
@@ -2681,7 +2694,7 @@ export default function StudioApp() {
         )}
       </main>
       <footer
-        className={`player ${active && view !== "tracks" ? "visible" : ""}`}
+        className={`player ${active && view !== "tracks" && view !== "voice-studio" ? "visible" : ""}`}
       >
         {/* Music is instrumental/generated; captions are not applicable. */}
         <audio

@@ -37,6 +37,9 @@ test("Worker routes pass the PostgreSQL binding through authentication", async (
     "auth/login",
     "auth/logout",
     "auth/session",
+    "projects",
+    "jobs/[id]",
+    "voice-library",
     "covers",
     "generations",
     "generations/[id]",
@@ -1241,4 +1244,52 @@ test("background generation forwards Kie credentials and model to the provider",
   const queueHandler = source.slice(source.indexOf("async queue("));
   assert.match(queueHandler, /kieApiKey:\s*env\.KIE_API_KEY/);
   assert.match(queueHandler, /kieModel:\s*env\.KIE_MODEL/);
+});
+
+test("Phase 1 foundation is additive, durable, and owner scoped", async () => {
+  const [schema, migration, projectRoute, jobRoute, voiceRoute, access, studio, shell] = await Promise.all([
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle-pg/0009_dusty_mandroid.sql", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/jobs/[id]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/voice-library/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/project-access.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/voice-studio.tsx", import.meta.url), "utf8"),
+  ]);
+  for (const model of [
+    "projectMembers",
+    "jobs",
+    "jobEvents",
+    "tracks",
+    "songVersionTracks",
+    "voiceModelArtifacts",
+  ]) assert.match(schema, new RegExp(`export const ${model}=`));
+  for (const table of [
+    "project_members",
+    "jobs",
+    "job_events",
+    "tracks",
+    "song_version_tracks",
+    "voice_model_artifacts",
+  ]) assert.match(migration, new RegExp(`CREATE TABLE "${table}"`));
+  assert.match(migration, /dozi_create_personal_project/);
+  assert.match(migration, /dozi_sync_generation_job/);
+  assert.match(migration, /dozi_sync_version_asset_track/);
+  assert.match(migration, /Cancellation requested/);
+  assert.match(projectRoute, /join project_members pm/);
+  assert.match(projectRoute, /values\(\$\{rows\[0\]\.id\},\$\{user\.id\},'OWNER'\)/);
+  assert.match(jobRoute, /where id=\$\{id\} and owner_id=\$\{user\.id\}/);
+  assert.match(jobRoute, /from job_events where job_id=\$\{id\}/);
+  assert.match(voiceRoute, /where p\.owner_id=\$\{user\.id\}/);
+  assert.match(voiceRoute, /permissionScope: "PRIVATE_OWNER"/);
+  assert.match(access, /PROJECT_ACCESS_DENIED/);
+  assert.match(access, /roleRank\[membership\.role\] < roleRank\[minimumRole\]/);
+  assert.match(studio, />Voice Studio</);
+  assert.match(studio, /<VoiceStudio/);
+  assert.match(shell, /fetch\("\/api\/projects"/);
+  assert.match(shell, /fetch\("\/api\/voice-library"/);
+  assert.match(shell, /Audio & voice library/);
+  assert.match(shell, /Arrangement editor shell/);
+  assert.match(shell, /Processing & editor/);
 });
