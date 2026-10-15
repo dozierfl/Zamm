@@ -75,6 +75,7 @@ def render_artist_vocal(
     separator_model: str,
     separator_device: str,
     voice_identity_strength: float = 100,
+    maximum_duration_seconds: float | None = None,
     compute_environment: dict[str, str] | None = None,
     compute_metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -82,6 +83,8 @@ def render_artist_vocal(
         raise ValueError("VOCAL_IDENTITY_SOURCE_EMPTY")
 
     source, sample_rate = _decode_audio(source_data)
+    if maximum_duration_seconds is not None:
+        source = source[:, : max(1, round(sample_rate * maximum_duration_seconds))]
     frames = source.shape[1]
     channels = source.shape[0]
     if frames < sample_rate:

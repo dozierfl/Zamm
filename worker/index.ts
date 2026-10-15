@@ -6,6 +6,12 @@ import { R2AudioStorage } from "../lib/audio-storage";
 import { GenerationOrchestrator } from "../lib/generation-orchestrator";
 import { createProvider } from "../lib/providers";
 import { HttpVocalIdentityProcessor } from "../lib/vocal-identity-processor";
+import { VoiceConversionOrchestrator } from "../lib/voice-conversion-orchestrator";
+import { createVoiceProvider } from "../lib/voice-provider";
+
+type WorkMessage =
+  | { generationJobId: string }
+  | { voiceConversionJobId: string };
 
 interface Env {
   ASSETS: Fetcher;
@@ -19,7 +25,7 @@ interface Env {
   ELEVENLABS_MODEL?: string;
   KIE_API_KEY?: string;
   KIE_MODEL?: string;
-  GENERATION_QUEUE: Queue<{ generationJobId: string }>;
+  GENERATION_QUEUE: Queue<WorkMessage>;
   AUDIO: R2Bucket;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -58,7 +64,7 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
-  async queue(batch:MessageBatch<{generationJobId:string}>,env:Env):Promise<void>{const orchestrator=new GenerationOrchestrator(getSql(env.DATABASE_URL),new R2AudioStorage(env.AUDIO),name=>createProvider(name,{aiServiceBaseUrl:env.AI_SERVICE_BASE_URL,aiServiceToken:env.AI_SERVICE_TOKEN,aceStepModel:env.ACESTEP_MODEL,minimaxModel:env.MINIMAX_MODEL,elevenLabsApiKey:env.ELEVENLABS_API_KEY,elevenLabsModel:env.ELEVENLABS_MODEL,kieApiKey:env.KIE_API_KEY,kieModel:env.KIE_MODEL}),env.AI_SERVICE_BASE_URL?new HttpVocalIdentityProcessor(env.AI_SERVICE_BASE_URL,env.AI_SERVICE_TOKEN):undefined);for(const message of batch.messages){try{await orchestrator.process(message.body.generationJobId);message.ack()}catch(error){const retryable=error instanceof Error&&!error.message.includes("MASTER_ASSET_REQUIRED")&&!error.message.includes("PROVIDER_UNAVAILABLE");if(retryable)message.retry();else message.ack()}}},
+  async queue(batch:MessageBatch<WorkMessage>,env:Env):Promise<void>{const sql=getSql(env.DATABASE_URL),storage=new R2AudioStorage(env.AUDIO),providerConfig={aiServiceBaseUrl:env.AI_SERVICE_BASE_URL,aiServiceToken:env.AI_SERVICE_TOKEN,aceStepModel:env.ACESTEP_MODEL,minimaxModel:env.MINIMAX_MODEL,elevenLabsApiKey:env.ELEVENLABS_API_KEY,elevenLabsModel:env.ELEVENLABS_MODEL,kieApiKey:env.KIE_API_KEY,kieModel:env.KIE_MODEL},orchestrator=new GenerationOrchestrator(sql,storage,name=>createProvider(name,providerConfig),env.AI_SERVICE_BASE_URL?new HttpVocalIdentityProcessor(env.AI_SERVICE_BASE_URL,env.AI_SERVICE_TOKEN):undefined),voiceOrchestrator=new VoiceConversionOrchestrator(sql,storage,name=>createVoiceProvider(name,providerConfig));for(const message of batch.messages){try{if("voiceConversionJobId" in message.body)await voiceOrchestrator.process(message.body.voiceConversionJobId);else await orchestrator.process(message.body.generationJobId);message.ack()}catch(error){const code=error instanceof Error?error.message:"",retryable=Boolean(code)&&!code.includes("MASTER_ASSET_REQUIRED")&&!code.includes("PROVIDER_UNAVAILABLE")&&!code.includes("MODEL_UNAVAILABLE")&&code!=="VOICE_PROVIDER_UNSUPPORTED"&&code!=="JOB_NOT_CLAIMABLE";if(retryable)message.retry();else message.ack()}}},
 };
 
 export default worker;

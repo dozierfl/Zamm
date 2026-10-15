@@ -1,5 +1,11 @@
 # Architecture
 
+## Voice conversion vertical slice
+
+Voice Studio submits an authenticated, rights-attested source performance to an owner/project-scoped API. The API preserves the source in private object storage, records a durable generalized job plus `voice_conversion_runs` lineage, and dispatches the existing Cloudflare queue. The worker selects a `VoiceProvider`, loads the immutable voice model artifact references and source, and calls the private AI service. RVC-v2 and BS-RoFormer run off the frontend thread; successful aligned master and vocal assets return to private storage and are committed atomically to the run. Job events drive UI progress, while owner-scoped audio routes provide playback.
+
+The provider boundary exposes capabilities, health, preview, and conversion, so UI and orchestration do not depend directly on RVC. Model references are never returned by public APIs, and the AI service rejects references outside its configured private model root.
+
 The MVP is a Vinext/React application compiled for Cloudflare Workers. `StudioApp` owns the interactive surface while route handlers enforce identity, ownership, validation, and job transitions. PostgreSQL stores accounts, sessions, songs, jobs, assets, and immutable versions. R2 stores WAV masters.
 
 The boundary is normalized around songs, immutable versions, generation jobs, composition plans, and provider capabilities. The deterministic provider runs server-side. Active jobs are durable and resumable: authenticated polling advances the orchestrator and an idempotent completion transaction prevents duplicate versions. A dedicated queue consumer can later replace this trigger without changing the API contract.

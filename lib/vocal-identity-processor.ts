@@ -11,6 +11,7 @@ export type VocalIdentityProcessingRequest = VocalIdentitySelection & {
   jobId: string;
   source: GeneratedAsset;
   voiceIdentityStrength: number;
+  previewDurationSeconds?: number;
 };
 
 export interface VocalIdentityProcessor {
@@ -43,6 +44,7 @@ export class HttpVocalIdentityProcessor implements VocalIdentityProcessor {
           sourceMimeType: request.source.metadata.mimeType,
           sourceAudioBase64: bytesToBase64(bytes),
           voiceIdentityStrength: request.voiceIdentityStrength,
+          previewDurationSeconds: request.previewDurationSeconds,
         }),
       });
     } catch {
