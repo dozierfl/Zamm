@@ -169,7 +169,10 @@ def render_artist_vocal(
             "--rms-mix-rate",
             os.getenv("DOZI_RVC_RMS_MIX_RATE", "0.5"),
             "--protect",
-            os.getenv("DOZI_RVC_PROTECT", "0"),
+            # Preserve unvoiced consonants and breaths from the separated
+            # performance. Full replacement is prone to metallic artifacts,
+            # especially on dense generated masters.
+            os.getenv("DOZI_RVC_PROTECT", "0.33"),
             "--format",
             "wav",
             "--overwrite",

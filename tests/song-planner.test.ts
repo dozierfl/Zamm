@@ -8,7 +8,7 @@ import { validateElevenLabsPolicy } from "../lib/provider-policy.ts";
 const base = { prompt: "A song about coming home" };
 function payload(input: Record<string, unknown>) {
   const parsed = createGenerationSchema.parse({ ...base, ...input });
-  return kieInput({ jobId: "j", userId: "u", songId: "s", versionId: "v", seed: 1, outputMode: "MASTER_ONLY", compositionPlan: compose(parsed), lyrics: parsed.lyrics }, "V6");
+  return kieInput({ jobId: "j", userId: "u", songId: "s", versionId: "v", seed: 1, outputMode: "MASTER_ONLY", compositionPlan: compose(parsed), lyrics: parsed.lyrics, providerOptions: parsed.providerOptions }, "V6");
 }
 test("genre palettes and automatic vocals are distinct", () => {
   const country = planSong({ ...base, genre: "Country" });
@@ -50,8 +50,55 @@ test("automatic lyrics use the idea, supplied lyrics use custom mode unchanged",
   const custom = payload({ lyrics, durationSeconds: 180 });
   assert.equal(custom.custom_mode, true);
   assert.equal(custom.prompt, lyrics);
+  assert.equal(custom.lyrics, lyrics);
   assert.equal(custom.duration, 180);
   assert.ok(custom.style.includes(base.prompt));
+});
+test("audio covers can generate a provider vocalist without requiring a lyric prompt", () => {
+  const parsed = createGenerationSchema.parse({ ...base, lyrics: "" });
+  const cover = kieInput(
+    {
+      jobId: "j",
+      userId: "u",
+      songId: "s",
+      versionId: "v",
+      seed: 1,
+      outputMode: "MASTER_ONLY",
+      compositionPlan: compose(parsed),
+      lyrics: parsed.lyrics,
+    },
+    "V6",
+    true,
+  );
+  assert.equal("custom_mode" in cover, false);
+  assert.equal("prompt" in cover, false);
+  assert.equal(cover.lyrics, undefined);
+  assert.equal(cover.instrumental, false);
+  assert.match(cover.style || "", /BPM/);
+});
+test("Kie custom controls are forwarded without changing non-custom generations", () => {
+  const custom = payload({
+    lyrics: "[Verse]\nComing home",
+    providerOptions: {
+      negativeTags: "heavy reverb, autotune",
+      personaId: "voice_123",
+      personaModel: "voice_persona",
+      styleWeight: 80,
+      weirdnessConstraint: 25,
+      audioWeight: 90,
+      variety: 2,
+    },
+  });
+  assert.equal(custom.negative_tags, "heavy reverb, autotune");
+  assert.equal(custom.persona_id, "voice_123");
+  assert.equal(custom.persona_model, "voice_persona");
+  assert.equal(custom.style_weight, 0.8);
+  assert.equal(custom.weirdness_constraint, 0.25);
+  assert.equal(custom.audio_weight, 0.9);
+  assert.equal(custom.variety, 2);
+  const automatic = payload({ providerOptions: { styleWeight: 80, variety: 4 } });
+  assert.equal(automatic.style_weight, undefined);
+  assert.equal(automatic.variety, undefined);
 });
 test("prompt tempo and key are respected, manual controls take precedence", () => {
   const inferred = planSong({ prompt: "A country song at 92 BPM in D minor" });

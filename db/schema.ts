@@ -19,6 +19,23 @@ export const vocalistPermissionStatusEnum=pgEnum("vocalist_permission_status",["
 const createdAt=()=>timestamp("created_at",{withTimezone:true}).notNull().defaultNow();
 const updatedAt=()=>timestamp("updated_at",{withTimezone:true}).notNull().defaultNow();
 
+// Deliberately independent of song/asset foreign keys so a committed deletion
+// can still retry private object cleanup after its metadata is gone.
+export const audioDeletionJobs=pgTable("audio_deletion_jobs",{
+  id:uuid("id").primaryKey().defaultRandom(),
+  ownerId:uuid("owner_id").notNull(),
+  audioAssetId:uuid("audio_asset_id"),
+  generationJobId:uuid("generation_job_id"),
+  storageKey:text("storage_key").notNull(),
+  attemptCount:integer("attempt_count").notNull().default(0),
+  lastAttemptAt:timestamp("last_attempt_at",{withTimezone:true}),
+  createdAt:createdAt(),
+},t=>[
+  uniqueIndex("audio_deletion_storage_key_unique").on(t.storageKey),
+  index("audio_deletion_pending_idx").on(t.lastAttemptAt,t.createdAt),
+  index("audio_deletion_owner_idx").on(t.ownerId),
+]);
+
 export const users=pgTable("users",{id:uuid("id").primaryKey().defaultRandom(),email:text("email").notNull(),displayName:text("display_name").notNull(),passwordHash:text("password_hash").notNull(),passwordSalt:text("password_salt").notNull(),createdAt:createdAt(),updatedAt:updatedAt()},t=>[uniqueIndex("users_email_unique").on(t.email)]);
 export const artistVocalProfiles=pgTable("artist_vocal_profiles",{id:uuid("id").primaryKey().defaultRandom(),ownerId:uuid("owner_id").notNull().references(()=>users.id,{onDelete:"cascade"}),name:text("name").notNull(),status:vocalProfileStatusEnum("status").notNull().default("DRAFT"),isPrivate:boolean("is_private").notNull().default(true),usableSingingSeconds:doublePrecision("usable_singing_seconds").notNull().default(0),qualityScore:doublePrecision("quality_score"),rangeLowMidi:integer("range_low_midi"),rangeHighMidi:integer("range_high_midi"),consentPolicyVersion:text("consent_policy_version"),consentedAt:timestamp("consented_at",{withTimezone:true}),verifiedAt:timestamp("verified_at",{withTimezone:true}),revokedAt:timestamp("revoked_at",{withTimezone:true}),revocationReason:text("revocation_reason"),metadata:jsonb("metadata").$type<Record<string,unknown>>().notNull().default({}),createdAt:createdAt(),updatedAt:updatedAt()},t=>[uniqueIndex("vocal_profiles_owner_name_unique").on(t.ownerId,t.name),index("vocal_profiles_owner_status_idx").on(t.ownerId,t.status),check("vocal_profiles_quality_range",sql`${t.qualityScore} is null or ${t.qualityScore} between 0 and 100`),check("vocal_profiles_duration_nonnegative",sql`${t.usableSingingSeconds}>=0`),check("vocal_profiles_midi_range",sql`(${t.rangeLowMidi} is null or ${t.rangeLowMidi} between 0 and 127) and (${t.rangeHighMidi} is null or ${t.rangeHighMidi} between 0 and 127) and (${t.rangeLowMidi} is null or ${t.rangeHighMidi} is null or ${t.rangeLowMidi}<=${t.rangeHighMidi})`)]);
 export const vocalistPermissions=pgTable("vocalist_permissions",{id:uuid("id").primaryKey().defaultRandom(),ownerId:uuid("owner_id").notNull().references(()=>users.id,{onDelete:"cascade"}),profileId:uuid("profile_id").notNull().references(()=>artistVocalProfiles.id,{onDelete:"cascade"}),tokenHash:text("token_hash").notNull(),vocalistName:text("vocalist_name").notNull(),projectTitle:text("project_title").notNull(),allowedUses:jsonb("allowed_uses").$type<string[]>().notNull().default([]),policyVersion:text("policy_version").notNull(),status:vocalistPermissionStatusEnum("status").notNull().default("PENDING"),signedName:text("signed_name"),attestationText:text("attestation_text"),acceptedAt:timestamp("accepted_at",{withTimezone:true}),revokedAt:timestamp("revoked_at",{withTimezone:true}),expiresAt:timestamp("expires_at",{withTimezone:true}).notNull(),createdAt:createdAt(),updatedAt:updatedAt()},t=>[uniqueIndex("vocalist_permissions_token_hash_unique").on(t.tokenHash),index("vocalist_permissions_owner_created_idx").on(t.ownerId,t.createdAt),index("vocalist_permissions_profile_status_idx").on(t.profileId,t.status)]);

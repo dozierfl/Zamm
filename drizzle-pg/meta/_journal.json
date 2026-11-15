@@ -64,6 +64,20 @@
       "when": 1790222400000,
       "tag": "0008_vocalist_permission_links",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794032942289,
+      "tag": "0009_unusual_ender_wiggin",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794033064554,
+      "tag": "0010_dark_nick_fury",
+      "breakpoints": true
     }
   ]
 }

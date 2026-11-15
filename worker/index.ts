@@ -6,6 +6,7 @@ import { R2AudioStorage } from "../lib/audio-storage";
 import { GenerationOrchestrator } from "../lib/generation-orchestrator";
 import { createProvider } from "../lib/providers";
 import { HttpVocalIdentityProcessor } from "../lib/vocal-identity-processor";
+import { purgeArchivedSongs } from "../lib/song-retention";
 
 interface Env {
   ASSETS: Fetcher;
@@ -42,6 +43,15 @@ interface ExecutionContext {
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
 const worker = {
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    const sql = getSql(env.DATABASE_URL);
+    try {
+      const result = await purgeArchivedSongs(sql, new R2AudioStorage(env.AUDIO));
+      console.log(JSON.stringify({ event: "song_retention", ...result }));
+    } finally {
+      await sql.end();
+    }
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 

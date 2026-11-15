@@ -3,6 +3,7 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-05-22",
   "vars": { "MUSIC_PROVIDER": "mock" },
+  "triggers": { "crons": ["0 * * * *"] },
   "queues": {
     "producers": [{ "binding": "GENERATION_QUEUE", "queue": "dozi-generation" }],
     "consumers": [{ "queue": "dozi-generation", "max_batch_size": 1, "max_retries": 3 }]

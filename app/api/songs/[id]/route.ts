@@ -2,17 +2,39 @@ import { env } from "cloudflare:workers";
 import { getSql } from "../../../../db";
 import { apiError, requireUser } from "../../../../lib/auth";
 import type { AppBindings } from "../../../../lib/config";
+import { R2AudioStorage } from "../../../../lib/audio-storage";
+import { ARCHIVE_RETENTION_DAYS, drainAudioDeletions, removeSong, SongRemovalError } from "../../../../lib/song-retention";
 const bindings=env as unknown as AppBindings;
 export async function PATCH(request:Request,{params}:{params:Promise<{id:string}>}){
   try{
     const user=await requireUser(request,bindings.DATABASE_URL),{id}=await params;
-    const body=await request.json();
-    if(typeof body!=="object"||body===null||!("lyrics" in body)||typeof body.lyrics!=="string"||body.lyrics.length>10000)return Response.json({error:{message:"Lyrics must be text, up to 10,000 characters."}},{status:400});
+    const body=await request.json() as {lyrics?:unknown;studioSessionId?:unknown};
+    if(typeof body!=="object"||body===null)return Response.json({error:{message:"Invalid song update."}},{status:400});
     const sql=getSql(bindings.DATABASE_URL);
-    const rows=await sql`update songs set lyrics=${body.lyrics} where id=${id} and user_id=${user.id} and archived_at is null returning id`;
+    if("lyrics" in body){if(typeof body.lyrics!=="string"||body.lyrics.length>10000)return Response.json({error:{message:"Lyrics must be text, up to 10,000 characters."}},{status:400});const rows=await sql`update songs set lyrics=${body.lyrics},updated_at=now() where id=${id} and user_id=${user.id} and archived_at is null returning id`;if(!rows.length)return Response.json({error:{message:"Song not found."}},{status:404});return Response.json({saved:true})}
+    if(!("studioSessionId" in body)||!(typeof body.studioSessionId==="string"||body.studioSessionId===null))return Response.json({error:{message:"Choose a Studio Session or Unsorted."}},{status:400});
+    if(body.studioSessionId){const sessions=await sql`select id from projects where id=${body.studioSessionId} and user_id=${user.id} limit 1`;if(!sessions[0])return Response.json({error:{message:"Studio Session not found."}},{status:404})}
+    const rows=await sql`update songs set project_id=${body.studioSessionId},updated_at=now() where id=${id} and user_id=${user.id} and archived_at is null returning id`;
     if(!rows.length)return Response.json({error:{message:"Song not found."}},{status:404});
-    return Response.json({saved:true});
+    return Response.json({saved:true,studioSessionId:body.studioSessionId});
   }catch(error){return apiError(error)}
 }
 export async function GET(request:Request,{params}:{params:Promise<{id:string}>}){try{const user=await requireUser(request,bindings.DATABASE_URL),{id}=await params,sql=getSql(bindings.DATABASE_URL),songs=await sql<Record<string,unknown>[]>`select id,title,description,lyrics,is_instrumental as "isInstrumental",created_at as "createdAt" from songs where id=${id} and user_id=${user.id} and archived_at is null`,song=songs[0];if(!song)return Response.json({error:{code:"NOT_FOUND",message:"Song not found.",retryable:false}},{status:404});const versions=await sql<Record<string,unknown>[]>`select v.id,v.version_number version,v.duration_seconds duration,v.bpm,v.musical_key as "musicalKey",v.scale,v.prompt,v.provider,v.provider_model as "providerModel",v.seed,v.created_at as "createdAt",a.id as "audioAssetId",a.waveform_data waveform,a.mime_type as "mimeType",a.codec from song_versions v left join audio_assets a on a.id=v.audio_asset_id and a.owner_id=${user.id} where v.song_id=${id} order by v.version_number desc`,assets=await sql<Record<string,unknown>[]>`select va.id,va.song_version_id as "songVersionId",a.id as "audioAssetId",va.role,va.instrument,va.instrument_group as "instrumentGroup",va.source_type as "sourceType",va.sort_order as "sortOrder",va.is_primary as "isPrimary",va.timeline_start_seconds as "timelineStartSeconds",va.source_start_seconds as "sourceStartSeconds",va.source_end_seconds as "sourceEndSeconds",va.gain_db as "gainDb",va.pan,va.metadata,a.duration_seconds as "durationSeconds",a.waveform_data waveform,a.mime_type as "mimeType",a.codec from version_assets va join song_versions v on v.id=va.song_version_id join audio_assets a on a.id=va.audio_asset_id and a.owner_id=${user.id} where v.song_id=${id} order by v.version_number desc,va.sort_order,va.created_at`;return Response.json({song,versions:versions.map(v=>({...v,audioUrl:v.audioAssetId?`/api/audio/${v.audioAssetId}`:undefined,assets:assets.filter(a=>a.songVersionId===v.id).map(a=>({...a,audioUrl:`/api/audio/${a.audioAssetId}`}))}))})}catch(error){return apiError(error)}}
-export async function DELETE(request:Request,{params}:{params:Promise<{id:string}>}){try{const user=await requireUser(request,bindings.DATABASE_URL),{id}=await params,sql=getSql(bindings.DATABASE_URL),rows=await sql`update songs set archived_at=now(),updated_at=now() where id=${id} and user_id=${user.id} and archived_at is null returning id`;if(!rows[0])return Response.json({error:{code:"NOT_FOUND",message:"Song not found.",retryable:false}},{status:404});return Response.json({archived:true})}catch(error){return apiError(error)}}
+export async function DELETE(request:Request,{params}:{params:Promise<{id:string}>}){
+  try{
+    const user=await requireUser(request,bindings.DATABASE_URL),{id}=await params,sql=getSql(bindings.DATABASE_URL);
+    if(new URL(request.url).searchParams.get("permanent")==="true"){
+      await removeSong(sql,id,user.id,"failed");
+      // Metadata deletion succeeds even if storage needs a later scheduled retry.
+      await drainAudioDeletions(sql,new R2AudioStorage(bindings.AUDIO),{ownerId:user.id,limit:20}).catch(()=>undefined);
+      const pending=await sql`select 1 from audio_deletion_jobs where owner_id=${user.id} limit 1`.catch(()=>[true]);
+      return Response.json({deleted:true,cleanupPending:pending.length>0});
+    }
+    const rows=await sql`update songs set archived_at=now(),updated_at=now() where id=${id} and user_id=${user.id} and archived_at is null returning id`;
+    if(!rows[0])return Response.json({error:{code:"NOT_FOUND",message:"Song not found.",retryable:false}},{status:404});
+    return Response.json({archived:true,retentionDays:ARCHIVE_RETENTION_DAYS});
+  }catch(error){
+    if(error instanceof SongRemovalError)return Response.json({error:{code:error.code,message:error.message,retryable:error.status===409}},{status:error.status});
+    return apiError(error);
+  }
+}

@@ -69,7 +69,21 @@ export class KieMusicProvider implements MusicGenerationProvider{
     if(request.outputMode!=="MASTER_ONLY")throw new Error("PROVIDER_OUTPUT_MODE_UNSUPPORTED");
     if(reference.sourceDurationSeconds>480)throw new Error("COVER_REFERENCE_TOO_LONG");
     const uploadUrl=await this.upload(reference);
-    return this.createAndWait("ai-music-api/upload-and-cover-audio",{...kieInput(request,this.model,true),upload_url:uploadUrl},request,reference);
+    const weight=(value:number)=>Math.round(Math.max(0,Math.min(100,value))/100*100)/100;
+    const optionWeight=(key:"audioWeight"|"styleWeight"|"weirdnessConstraint",fallback:number)=>{
+      const value=request.providerOptions?.[key];
+      return typeof value==="number"&&Number.isFinite(value)?weight(value):weight(fallback);
+    };
+    return this.createAndWait("ai-music-api/upload-and-cover-audio",{
+      ...kieInput(request,this.model,true),
+      upload_url:uploadUrl,
+      // Kie uses these controls to balance source timing/melody against new
+      // direction. Preserve the user's cover settings instead of treating
+      // every request as an unconstrained reimagining.
+      audio_weight:optionWeight("audioWeight",reference.sourceAdherence),
+      style_weight:optionWeight("styleWeight",reference.styleInfluence),
+      weirdness_constraint:optionWeight("weirdnessConstraint",100-reference.sourceAdherence),
+    },request,reference);
   }
   private input(request:GenerationRequest){return kieInput(request,this.model)}
   private headers(){return{authorization:`Bearer ${this.apiKey}`}}
@@ -92,7 +106,7 @@ export class KieMusicProvider implements MusicGenerationProvider{
     for(let attempt=0;attempt<240;attempt++){
       let response:Response;try{response=await fetch(`${this.baseUrl}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`,{headers:this.headers()})}catch{throw new Error("GENERATION_PROVIDER_UNAVAILABLE")}
       const body=await response.json().catch(()=>null) as unknown;if(!response.ok)throw new Error(kieError(response.status));
-      const status=kieStatus(body),track=kieTrack(body);if(track)return track;if(status.includes("FAIL")||status.includes("ERROR"))throw new Error("GENERATION_PROVIDER_FAILED");
+      const status=kieStatus(body),track=kieTrack(body);if(track)return track;if(status.includes("FAIL")||status.includes("ERROR"))throw new Error(kieTaskFailure(body));
       if(this.pollIntervalMs>0)await new Promise(resolve=>setTimeout(resolve,this.pollIntervalMs));
     }
     throw new Error("GENERATION_TIMEOUT");
@@ -112,4 +126,5 @@ function kieError(status:number,fallback="GENERATION_PROVIDER_FAILED"){if(status
 function kieRecord(value:unknown):Record<string,unknown>|undefined{return value!==null&&typeof value==="object"?value as Record<string,unknown>:undefined}
 function kiePayload(value:unknown){const root=kieRecord(value),data=kieRecord(root?.data);let result:unknown=data?.resultJson??data?.result_json;if(typeof result==="string")try{result=JSON.parse(result)}catch{result=undefined}return{data,result:kieRecord(result)}}
 function kieStatus(value:unknown){const {data}=kiePayload(value),status=data?.status??data?.state;return typeof status==="string"?status.toUpperCase():""}
+function kieTaskFailure(value:unknown){const description=JSON.stringify(value).toLowerCase();if(/copyright|rights|infringement|policy/.test(description))return"COVER_REFERENCE_REJECTED";if(/upload|unsupported.*audio|invalid.*audio|file.*invalid/.test(description))return"COVER_REFERENCE_UPLOAD_FAILED";return"COVER_PROVIDER_FAILED"}
 function kieTrack(value:unknown){const {data,result}=kiePayload(value),response=kieRecord(data?.response)??kieRecord(result?.response)??result,candidates=response?.sunoData??response?.suno_data??response?.data??data?.sunoData;if(!Array.isArray(candidates))return undefined;for(const item of candidates){const track=kieRecord(item),audioUrl=track?.audio_url??track?.audioUrl;if(typeof audioUrl!=="string"||!audioUrl)continue;return{id:typeof track?.id==="string"?track.id:"kie-track",title:typeof track?.title==="string"?track.title:"Dozi song",audioUrl,duration:typeof track?.duration==="number"?track.duration:undefined,model:typeof track?.model_name==="string"?track.model_name:undefined}}return undefined}

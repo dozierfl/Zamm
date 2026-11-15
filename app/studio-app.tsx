@@ -23,6 +23,8 @@ type Status =
 type Song = {
   id: string;
   songId?: string;
+  studioSessionId?: string;
+  studioSessionName?: string;
   title: string;
   prompt: string;
   createdAt: string;
@@ -40,6 +42,7 @@ type Song = {
   audioUrl?: string;
   errorMessage?: string;
 };
+type StudioSession = { id: string; title: string; songCount: number; createdAt: string; updatedAt: string };
 type QualityScoreKey =
   | "fidelity"
   | "musicality"
@@ -563,7 +566,9 @@ export default function StudioApp() {
     ),
     [instrumental, setInstrumental] = useState(false),
     [lyrics, setLyrics] = useState(""),
+    [lyricEntryMode, setLyricEntryMode] = useState<"write" | "generate">("write"),
     [songBpm, setSongBpm] = useState(76),
+    [bpmDraft, setBpmDraft] = useState("76"),
     [autoTempo, setAutoTempo] = useState(true),
     [autoKey, setAutoKey] = useState(true),
     [songGenre, setSongGenre] = useState(""),
@@ -574,8 +579,18 @@ export default function StudioApp() {
     [songKey, setSongKey] = useState("F#"),
     [songScale, setSongScale] = useState<"major" | "minor">("minor"),
     [durationSeconds, setDurationSeconds] = useState(12),
+    [songTitle, setSongTitle] = useState(""),
+    [negativeTags, setNegativeTags] = useState(""),
+    [kiePersonaId, setKiePersonaId] = useState(""),
+    [kiePersonaModel, setKiePersonaModel] = useState<"voice_persona" | "style_persona">("voice_persona"),
+    [kieStyleWeight, setKieStyleWeight] = useState(65),
+    [kieWeirdness, setKieWeirdness] = useState(35),
+    [kieAudioWeight, setKieAudioWeight] = useState(65),
+    [kieVariety, setKieVariety] = useState(1),
     [providerPolicyAccepted, setProviderPolicyAccepted] = useState(false),
     [songs, setSongs] = useState<Song[]>([]),
+    [studioSessions, setStudioSessions] = useState<StudioSession[]>([]),
+    [selectedStudioSessionId, setSelectedStudioSessionId] = useState(""),
     [profiles, setProfiles] = useState<VocalProfile[]>([]),
     [selectedVocalProfileId, setSelectedVocalProfileId] = useState(""),
     [vocalCast, setVocalCast] = useState<VocalCastAssignment[]>([]),
@@ -613,7 +628,7 @@ export default function StudioApp() {
     [workspaceBusy, setWorkspaceBusy] = useState(false),
     [workspaceError, setWorkspaceError] = useState(""),
     [libraryNotice, setLibraryNotice] = useState(""),
-    [archiveCandidate, setArchiveCandidate] = useState<Song | null>(null),
+    [archiveCandidates, setArchiveCandidates] = useState<Song[]>([]),
     [archiveBusy, setArchiveBusy] = useState(false),
     [qualityReviewStore, setQualityReviewStore] = useState<
       Record<string, Record<string, QualityReview>>
@@ -645,13 +660,24 @@ export default function StudioApp() {
     [search, setSearch] = useState(""),
     [librarySort, setLibrarySort] = useState<"newest" | "oldest">("newest"),
     [librarySource, setLibrarySource] = useState<
-      "all" | "generated" | "imported" | "my-voice"
+      "all" | "generated" | "imported" | "my-voice" | "failed"
     >("all"),
     [libraryView, setLibraryView] = useState<"grid" | "list">("grid"),
     [libraryVisibleCount, setLibraryVisibleCount] = useState(24),
+    [selectedLibrarySongIds, setSelectedLibrarySongIds] = useState<Set<string>>(
+      () => new Set(),
+    ),
+    [libraryMoveTarget, setLibraryMoveTarget] = useState(""),
+    [libraryMoveBusy, setLibraryMoveBusy] = useState(false),
     [blueprint, setBlueprint] = useState(true),
     [submitting, setSubmitting] = useState(false),
+    [cancellingGenerationIds, setCancellingGenerationIds] = useState<Set<string>>(
+      () => new Set(),
+    ),
     [notice, setNotice] = useState("");
+  const failedRemovalCount = archiveCandidates.filter((song) => song.status === "FAILED").length;
+  const selectedLibrarySongs = songs.filter((song) => song.songId && selectedLibrarySongIds.has(song.songId));
+  const selectedFailedCount = selectedLibrarySongs.filter((song) => song.status === "FAILED").length;
   const qualityReviews = useMemo(
     () => (user ? qualityReviewStore[user.id] || {} : {}),
     [qualityReviewStore, user],
@@ -667,6 +693,7 @@ export default function StudioApp() {
   }, [newestSongId]);
   const audio = useRef<HTMLAudioElement | null>(null),
     pendingSongStart = useRef<number | null>(null),
+    playbackRequest = useRef(0),
     recorder = useRef<MediaRecorder | null>(null),
     recordingChunks = useRef<Blob[]>([]),
     recordingElapsed = useRef(0),
@@ -694,12 +721,20 @@ export default function StudioApp() {
         ),
       [songs],
     );
+  const sessionSongs = useMemo(
+    () => selectedStudioSessionId ? songs.filter((song) => song.studioSessionId === selectedStudioSessionId) : songs.filter((song) => !song.studioSessionId),
+    [songs, selectedStudioSessionId],
+  );
   const loadSongs = useCallback(async () => {
     const res = await fetch("/api/generations", { cache: "no-store" });
     if (res.ok) {
       const data = (await res.json()) as { songs: Song[] };
       setSongs(data.songs);
     }
+  }, []);
+  const loadStudioSessions = useCallback(async () => {
+    const res = await fetch("/api/studio-sessions", { cache: "no-store" });
+    if (res.ok) setStudioSessions(((await res.json()) as { sessions: StudioSession[] }).sessions);
   }, []);
   const loadProfiles = useCallback(async () => {
     const res = await fetch("/api/vocal-profiles", { cache: "no-store" });
@@ -730,10 +765,10 @@ export default function StudioApp() {
   useEffect(() => {
     if (!user) return;
     const timer = window.setTimeout(() => {
-      void Promise.all([loadSongs(), loadProfiles()]);
+      void Promise.all([loadSongs(), loadProfiles(), loadStudioSessions()]);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [user, loadProfiles, loadSongs]);
+  }, [user, loadProfiles, loadSongs, loadStudioSessions]);
   useEffect(() => {
     window.localStorage.setItem(
       "dozi:quality-reviews:v1",
@@ -798,73 +833,72 @@ export default function StudioApp() {
   useEffect(() => {
     const el = audio.current;
     if (!el) return;
-    if (playing) {
-      if (pendingSongStart.current !== null) return;
-      void el.play().catch(() => setPlaying(false));
-    } else {
+    if (!playing) {
+      playbackRequest.current += 1;
       el.pause();
     }
-  }, [playing, active]);
+  }, [playing]);
   useEffect(() => () => stopMonitoring(), [stopMonitoring]);
   const fmt = (n: number) =>
     `${Math.floor(n / 60)}:${Math.floor(n % 60)
       .toString()
       .padStart(2, "0")}`;
-  function play(song: Song) {
-    if (!song.audioUrl) return;
-    setPlaybackNotice("");
-    pendingSongStart.current = null;
+  const startSongPlayback = useCallback(function startSongPlayback(song: Song, start?: number) {
     const element = audio.current;
-    if (active?.id === song.id) {
-      if (playing) {
-        element?.pause();
-        setPlaying(false);
-      } else {
-        setPlaying(true);
-        // Start within the button click itself so browsers treat this as a
-        // user-initiated playback request instead of an autoplay attempt.
-        void element?.play().catch(() => {
-          setPlaying(false);
-          setPlaybackNotice("This private audio could not start. Check your connection, then try Play again; the song itself is unchanged.");
-        });
-      }
+    if (!song.audioUrl || !element) return;
+    const request = ++playbackRequest.current;
+    setPlaybackNotice("");
+    const sourceChanged = element.getAttribute("src") !== song.audioUrl;
+    // This is the sole owner of the main player's source. A React src update
+    // after play() would reload the media and abort the first click's promise.
+    if (sourceChanged) {
+      pendingSongStart.current = start ?? 0;
+      element.src = song.audioUrl;
+    } else if (start !== undefined) {
+      pendingSongStart.current = start;
+    }
+    if (element.readyState >= 1 && pendingSongStart.current !== null) {
+      element.currentTime = pendingSongStart.current;
+      pendingSongStart.current = null;
+    }
+    setActive(song);
+    if (start !== undefined || sourceChanged) setTime(start ?? 0);
+    setPlaying(true);
+    // Keep play in the user gesture; seek once metadata becomes available.
+    void element.play().catch((error: unknown) => {
+      if (request !== playbackRequest.current) return;
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setPlaying(false);
+      setPlaybackNotice("This private audio could not start. Check your connection, then try Play again; the song itself is unchanged.");
+    });
+  }, []);
+  const play = useCallback(function play(song: Song) {
+    if (!song.audioUrl) return;
+    if (active?.id === song.id && playing) {
+      playbackRequest.current += 1;
+      audio.current?.pause();
+      setPlaying(false);
       return;
     }
-
-    setActive(song);
-    setTime(0);
-    setPlaying(true);
-    if (element) {
-      // React will also update this source after state commits, but setting it
-      // here lets playback begin from the card's Play button gesture.
-      element.src = song.audioUrl;
-      element.currentTime = 0;
-      void element.play().catch(() => {
-        setPlaying(false);
-        setPlaybackNotice("This private audio could not start. Check your connection, then try Play again; the song itself is unchanged.");
-      });
+    startSongPlayback(song);
+  }, [active, playing, startSongPlayback]);
+  function seekMainPlayer(target: number) {
+    const element = audio.current;
+    if (!element || !active) return;
+    const duration = Number.isFinite(element.duration) ? element.duration : active.duration;
+    const next = Math.max(0, Math.min(duration, target));
+    if (element.readyState >= 1) {
+      pendingSongStart.current = null;
+      element.currentTime = next;
+    } else {
+      pendingSongStart.current = next;
     }
+    setTime(next);
+    setPlaybackNotice("");
   }
   function playFromSongWaveform(song: Song, fraction: number) {
-    if (!song.audioUrl) return;
     const start = Math.max(0, Math.min(song.duration, fraction * song.duration));
-    if (active?.id === song.id) {
-      pendingSongStart.current = null;
-      if (audio.current) audio.current.currentTime = start;
-      setTime(start);
-      setPlaying(true);
-      void audio.current?.play().catch(() => setPlaying(false));
-      return;
-    }
-    pendingSongStart.current = start;
-    setActive(song);
-    setTime(start);
-    setPlaying(true);
-    if (audio.current) {
-      audio.current.src = song.audioUrl;
-      audio.current.currentTime = start;
-      void audio.current.play().catch(() => setPlaying(false));
-    }
+    startSongPlayback(song, start);
   }
   useEffect(() => {
     const isTextEntry = (target: EventTarget | null) =>
@@ -881,12 +915,12 @@ export default function StudioApp() {
         event.preventDefault();
         event.stopPropagation();
         setPlaybackNotice("");
-        setPlaying((current) => !current);
+        play(active);
       }
     };
     window.addEventListener("keydown", controlMainTransport, true);
     return () => window.removeEventListener("keydown", controlMainTransport, true);
-  }, [active, view]);
+  }, [active, view, play]);
   useEffect(() => {
     const returnToSongStart = (event: KeyboardEvent) => {
       if (
@@ -947,32 +981,75 @@ export default function StudioApp() {
       setWorkspaceBusy(false);
     }
   }
-  async function archiveLibrarySong() {
-    if (!archiveCandidate?.songId || archiveBusy) return;
+  function toggleLibrarySongSelection(songId: string) {
+    setSelectedLibrarySongIds((selected) => {
+      const next = new Set(selected);
+      if (next.has(songId)) next.delete(songId);
+      else next.add(songId);
+      return next;
+    });
+  }
+  async function moveSelectedLibrarySongs() {
+    if (!libraryMoveTarget || libraryMoveBusy) return;
+    const selected = songs.filter((song) => song.songId && selectedLibrarySongIds.has(song.songId));
+    if (!selected.length) return;
+    setLibraryMoveBusy(true);
+    setLibraryNotice("");
+    const studioSessionId = libraryMoveTarget === "__unsorted__" ? null : libraryMoveTarget;
+    try {
+      const results = await Promise.all(selected.map(async (song) => {
+        const response = await fetch(`/api/songs/${song.songId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ studioSessionId }) });
+        return { song, moved: response.ok };
+      }));
+      const movedIds = new Set(results.filter((result) => result.moved).flatMap((result) => result.song.songId ? [result.song.songId] : []));
+      if (!movedIds.size) throw new Error("The selected songs could not be moved.");
+      const sessionName = studioSessionId ? studioSessions.find((session) => session.id === studioSessionId)?.title || "Studio Session" : "Unsorted";
+      setSongs((items) => items.map((song) => movedIds.has(song.songId || "") ? { ...song, studioSessionId: studioSessionId || undefined, studioSessionName: studioSessionId ? sessionName : undefined } : song));
+      setSelectedLibrarySongIds((current) => new Set([...current].filter((id) => !movedIds.has(id))));
+      setLibraryMoveTarget("");
+      setLibraryNotice(`${movedIds.size} ${movedIds.size === 1 ? "song was" : "songs were"} moved to ${sessionName}.`);
+      void loadStudioSessions();
+    } catch (error) {
+      setLibraryNotice(error instanceof Error ? error.message : "The selected songs could not be moved.");
+    } finally { setLibraryMoveBusy(false); }
+  }
+  async function archiveLibrarySongs() {
+    const candidates = [...new Map(archiveCandidates.filter((song) => song.songId).map((song) => [song.songId, song])).values()];
+    if (!candidates.length || archiveBusy) return;
     setArchiveBusy(true);
     setLibraryNotice("");
     try {
-      const response = await fetch(`/api/songs/${archiveCandidate.songId}`, {
-          method: "DELETE",
-        }),
-        payload = (await response.json()) as {
-          archived?: boolean;
-          error?: { message?: string };
-        };
-      if (!response.ok || !payload.archived)
-        throw new Error(payload.error?.message || "The song could not be archived.");
-      const songId = archiveCandidate.songId;
-      setSongs((items) => items.filter((song) => song.songId !== songId));
-      if (active?.songId === songId) {
+      const results = await Promise.all(candidates.map(async (song) => {
+        try {
+          const response = await fetch(`/api/songs/${song.songId}${song.status === "FAILED" ? "?permanent=true" : ""}`, { method: "DELETE" });
+          const payload = (await response.json()) as { archived?: boolean; deleted?: boolean; error?: { message?: string } };
+          return { song, archived: response.ok && Boolean(payload.archived), deleted: response.ok && Boolean(payload.deleted), error: payload.error?.message };
+        } catch {
+          return { song, archived: false, deleted: false, error: "Connection lost. Refresh the Library before trying again." };
+        }
+      }));
+      const archivedIds = new Set(results.filter((result) => result.archived || result.deleted).flatMap((result) => result.song.songId ? [result.song.songId] : []));
+      if (!archivedIds.size) throw new Error(results.find((result) => result.error)?.error || "The selected songs could not be removed.");
+      setSongs((items) => items.filter((song) => !song.songId || !archivedIds.has(song.songId)));
+      if (active?.songId && archivedIds.has(active.songId)) {
         setPlaying(false);
         setActive(null);
         setTime(0);
       }
-      setLibraryNotice(`${archiveCandidate.title} was archived. Its private audio remains preserved.`);
-      setArchiveCandidate(null);
+      setSelectedLibrarySongIds((selected) => new Set([...selected].filter((id) => !archivedIds.has(id))));
+      const deleted = results.filter((result) => result.deleted).length;
+      const archived = results.filter((result) => result.archived).length;
+      const remaining = results.filter((result) => !result.deleted && !result.archived);
+      setLibraryNotice([
+        deleted ? `${deleted} failed ${deleted === 1 ? "song" : "songs"} permanently deleted.` : "",
+        archived ? `${archived} ${archived === 1 ? "song" : "songs"} archived. Audio and version history will be purged after 30 days.` : "",
+        remaining.length ? `${remaining.length} could not be removed. ${remaining[0].error || "Try again."}` : "",
+      ].filter(Boolean).join(" "));
+      setArchiveCandidates(remaining.map((result) => result.song));
+      void loadStudioSessions();
     } catch (error) {
       setLibraryNotice(
-        error instanceof Error ? error.message : "The song could not be archived.",
+        error instanceof Error ? error.message : "The song could not be removed.",
       );
     } finally {
       setArchiveBusy(false);
@@ -1013,12 +1090,22 @@ export default function StudioApp() {
     setQualityCandidate(null);
   }
   async function generate() {
+    const submittedLyrics =
+      !instrumental && lyricEntryMode === "write" ? lyrics : "";
+    if (!instrumental && lyricEntryMode === "write" && !submittedLyrics.trim()) {
+      setNotice("Write lyrics, or choose Generate lyrics to start from a song idea.");
+      return;
+    }
     if (
       !prompt.trim() ||
       submitting ||
       (["elevenlabs", "kie"].includes(provider.name) && !providerPolicyAccepted)
     )
       return;
+    if (!autoTempo && (!bpmDraft.trim() || !Number.isInteger(Number(bpmDraft)) || Number(bpmDraft) < 40 || Number(bpmDraft) > 220)) {
+      setNotice("Enter a whole-number BPM between 40 and 220.");
+      return;
+    }
     setSubmitting(true);
     setNotice("");
     try {
@@ -1029,8 +1116,9 @@ export default function StudioApp() {
             "idempotency-key": crypto.randomUUID(),
           },
           body: JSON.stringify({
+            title: songTitle.trim() || undefined,
             prompt,
-            lyrics,
+            lyrics: submittedLyrics,
             instrumental,
             genre: plan.genre,
             feel,
@@ -1041,9 +1129,19 @@ export default function StudioApp() {
             key: autoKey ? undefined : songKey,
             scale: autoKey ? undefined : songScale,
             durationSeconds,
+            studioSessionId: selectedStudioSessionId || null,
+            providerOptions: provider.name === "kie" ? {
+              negativeTags,
+              personaId: kiePersonaId,
+              personaModel: kiePersonaModel,
+              styleWeight: kieStyleWeight,
+              weirdnessConstraint: kieWeirdness,
+              audioWeight: kieAudioWeight,
+              variety: kieVariety,
+            } : {},
             providerPolicyAccepted,
             vocalProfileId: instrumental ? null : selectedVocalProfileId || null,
-            vocalCast: instrumental ? [] : cleanVocalCast(lyrics, vocalCast),
+            vocalCast: instrumental ? [] : cleanVocalCast(submittedLyrics, vocalCast),
           }),
         }),
         data = (await res.json()) as {
@@ -1053,6 +1151,7 @@ export default function StudioApp() {
       if (!res.ok || !data.song)
         throw new Error(data.error?.message || "Generation could not start.");
       setSongs((x) => [data.song as Song, ...x]);
+      void loadStudioSessions();
     } catch (err) {
       setNotice(
         err instanceof Error ? err.message : "Generation could not start.",
@@ -1060,6 +1159,40 @@ export default function StudioApp() {
     } finally {
       setSubmitting(false);
     }
+  }
+  async function cancelGeneration(song: Song) {
+    if (cancellingGenerationIds.has(song.id) || ["COMPLETE", "FAILED", "CANCELLED"].includes(song.status)) return;
+    setCancellingGenerationIds((ids) => new Set(ids).add(song.id));
+    try {
+      const response = await fetch(`/api/generations/${song.id}`, { method: "DELETE" });
+      const data = (await response.json()) as { cancelled?: boolean; error?: { message?: string } };
+      if (!response.ok || !data.cancelled) throw new Error(data.error?.message || "Generation could not be cancelled.");
+      setSongs((songs) => songs.map((item) => item.id === song.id ? { ...item, status: "CANCELLED", errorMessage: "Cancelled by you." } : item));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Generation could not be cancelled.");
+    } finally {
+      setCancellingGenerationIds((ids) => { const next = new Set(ids); next.delete(song.id); return next; });
+    }
+  }
+  async function createStudioSession() {
+    const title = window.prompt("Name this Studio Session");
+    if (!title?.trim()) return;
+    const response = await fetch("/api/studio-sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) });
+    const data = (await response.json()) as { session?: StudioSession; error?: { message?: string } };
+    if (!response.ok || !data.session) { setNotice(data.error?.message || "Studio Session could not be created."); return; }
+    setStudioSessions((sessions) => [data.session!, ...sessions]);
+    setSelectedStudioSessionId(data.session.id);
+  }
+  async function renameStudioSession() {
+    const session = studioSessions.find((item) => item.id === selectedStudioSessionId);
+    if (!session) return;
+    const title = window.prompt("Rename Studio Session", session.title);
+    if (!title?.trim() || title.trim() === session.title) return;
+    const response = await fetch(`/api/studio-sessions/${session.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) });
+    const data = (await response.json()) as { session?: StudioSession; error?: { message?: string } };
+    if (!response.ok || !data.session) { setNotice(data.error?.message || "Studio Session could not be renamed."); return; }
+    setStudioSessions((sessions) => sessions.map((item) => item.id === session.id ? { ...item, ...data.session! } : item));
+    setSongs((items) => items.map((song) => song.studioSessionId === session.id ? { ...song, studioSessionName: data.session!.title } : song));
   }
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -1647,6 +1780,7 @@ export default function StudioApp() {
           if (librarySource === "imported") return song.provider === "user-upload";
           if (librarySource === "generated") return song.provider !== "user-upload";
           if (librarySource === "my-voice") return Boolean(song.vocalist);
+          if (librarySource === "failed") return song.status === "FAILED";
           return true;
         })
         .sort((left, right) => {
@@ -1790,6 +1924,18 @@ export default function StudioApp() {
         {view === "create" ? (
           <div className="workspace">
             <section className="composer" aria-label="Song creation controls">
+              <div className="studio-session-picker">
+                <div>
+                  <small>STUDIO SESSION</small>
+                  <strong>{selectedStudioSessionId ? studioSessions.find((session) => session.id === selectedStudioSessionId)?.title || "Studio Session" : "Unsorted"}</strong>
+                </div>
+                <select value={selectedStudioSessionId} onChange={(event) => setSelectedStudioSessionId(event.target.value)} aria-label="Studio Session">
+                  <option value="">Unsorted</option>
+                  {studioSessions.map((session) => <option key={session.id} value={session.id}>{session.title} · {session.songCount} songs</option>)}
+                </select>
+                <button type="button" onClick={() => void createStudioSession()}>New</button>
+                {selectedStudioSessionId && <button type="button" onClick={() => void renameStudioSession()}>Rename</button>}
+              </div>
               <div className="mode-tabs">
                 {(["Simple", "Advanced"] as const).map((m) => (
                   <button
@@ -1801,19 +1947,65 @@ export default function StudioApp() {
                   </button>
                 ))}
               </div>
-              <label className="field-label" htmlFor="idea">
-                SONG IDEA <span>{prompt.length}/500</span>
-              </label>
-              <textarea
-                id="idea"
-                value={prompt}
-                maxLength={500}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Describe the song you want to make…"
-              />
+              {!instrumental && (
+                <div className="lyric-entry-mode" aria-label="Lyrics source">
+                  <button
+                    type="button"
+                    className={lyricEntryMode === "write" ? "active" : ""}
+                    aria-pressed={lyricEntryMode === "write"}
+                    onClick={() => setLyricEntryMode("write")}
+                  >
+                    Write lyrics
+                  </button>
+                  <button
+                    type="button"
+                    className={lyricEntryMode === "generate" ? "active" : ""}
+                    aria-pressed={lyricEntryMode === "generate"}
+                    onClick={() => setLyricEntryMode("generate")}
+                  >
+                    Generate lyrics
+                  </button>
+                </div>
+              )}
+              {!instrumental && lyricEntryMode === "write" ? (
+                <>
+                  <label className="field-label" htmlFor="lyrics">
+                    LYRICS <span>{lyrics.length}/5000</span>
+                  </label>
+                  <textarea
+                    id="lyrics"
+                    className="lyrics"
+                    value={lyrics}
+                    maxLength={5000}
+                    onChange={(e) => setLyrics(e.target.value)}
+                    placeholder="Write your lyrics with [Verse], [Chorus], and [Bridge] tags."
+                  />
+                  <p className="creation-help">
+                    Dozi uses your lyrics as written. Style, genre, and vocal controls shape the performance.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <label className="field-label" htmlFor="idea">
+                    SONG IDEA <span>{prompt.length}/500</span>
+                  </label>
+                  <textarea
+                    id="idea"
+                    value={prompt}
+                    maxLength={500}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="Describe the song you want to make…"
+                  />
+                  <p className="creation-help">
+                    {instrumental
+                      ? "Describe the mood, story, or scene that should guide the instrumental."
+                      : "Dozi uses this idea to write original lyrics for your song."}
+                  </p>
+                </>
+              )}
               <label className="field-label" htmlFor="song-style">STYLE & ARRANGEMENT <span>{style.length}/500</span></label>
               <textarea id="song-style" value={style} maxLength={500} onChange={(event) => setStyle(event.target.value)} placeholder="Country ballad, acoustic guitar and pedal steel, intimate verse, soaring chorus. No drums until verse two…" />
-              <p className="creation-help">Describe instruments, groove, production, and how the song develops. Leave blank for an arrangement guided by your genre and song idea.</p>
+              <p className="creation-help">Describe instruments, groove, production, and how the song develops. Leave blank for an arrangement guided by your genre and song direction.</p>
               <label className="field-label" htmlFor="create-genre">GENRE</label>
               <input id="create-genre" list="song-genres" value={songGenre} placeholder={plan.genre} maxLength={80} onChange={(event) => setSongGenre(event.target.value)} />
               <datalist id="song-genres">{musicGenres.map((genre) => <option key={genre} value={genre} />)}</datalist>
@@ -1867,26 +2059,19 @@ export default function StudioApp() {
                           : "Create and activate a trained profile in My Voice to sing with your own voice."}
                     </small>
                   </div>
-                  <div className="section-head">
-                    <span>LYRICS</span>
-                    <span>Optional · leave blank for automatic lyrics</span>
-                  </div>
-                  <textarea
-                    className="lyrics"
-                    value={lyrics}
-                    onChange={(e) => setLyrics(e.target.value)}
-                    placeholder="Write your lyrics with [Verse], [Chorus], and [Bridge] tags. Leave blank for provider-written lyrics based on your song idea."
-                  />
-                  <VocalCastEditor
-                    lyrics={lyrics}
-                    profiles={activeVocalProfiles}
-                    assignments={vocalCast}
-                    onChange={setVocalCast}
-                    onInvite={() => setVocalistPermissionOpen(true)}
-                  />
+                  {lyricEntryMode === "write" && (
+                    <VocalCastEditor
+                      lyrics={lyrics}
+                      profiles={activeVocalProfiles}
+                      assignments={vocalCast}
+                      onChange={setVocalCast}
+                      onInvite={() => setVocalistPermissionOpen(true)}
+                    />
+                  )}
                 </>
               )}
               {mode === "Advanced" && (
+                <>
                 <div className="advanced-grid">
                   <label>
                     Tempo
@@ -1895,12 +2080,23 @@ export default function StudioApp() {
                       type="number"
                       min="40"
                       max="220"
-                      value={autoTempo ? plan.bpm : songBpm}
+                      aria-label="BPM"
+                      value={autoTempo ? plan.bpm : bpmDraft}
                       disabled={autoTempo}
                       onChange={(event) => {
-                        const next = event.target.valueAsNumber;
-                        if (Number.isFinite(next))
-                          setSongBpm(Math.max(40, Math.min(220, Math.round(next))));
+                        const draft = event.target.value;
+                        setBpmDraft(draft);
+                        const next = Number(draft);
+                        if (draft.trim() && Number.isInteger(next) && next >= 40 && next <= 220)
+                          setSongBpm(next);
+                      }}
+                      onBlur={() => {
+                        const parsed = Number(bpmDraft);
+                        const next = bpmDraft.trim() && Number.isFinite(parsed)
+                          ? Math.max(40, Math.min(220, Math.round(parsed)))
+                          : songBpm;
+                        setSongBpm(next);
+                        setBpmDraft(String(next));
                       }}
                     />
                   </label>
@@ -1941,6 +2137,38 @@ export default function StudioApp() {
                     </select>
                   </label>
                 </div>
+                {provider.name === "kie" && (
+                  <fieldset className="kie-controls">
+                    <legend>Suno controls via Kie</legend>
+                    <p>These map directly to Kie&apos;s V6 request options. They apply when Dozi sends a custom generation (your lyrics or an instrumental).</p>
+                    <label className="kie-wide">Track title
+                      <input value={songTitle} maxLength={80} onChange={(event) => setSongTitle(event.target.value)} placeholder="Optional title sent to Suno" />
+                    </label>
+                    <label className="kie-wide">Exclude traits
+                      <input value={negativeTags} maxLength={500} onChange={(event) => setNegativeTags(event.target.value)} placeholder="For example: heavy reverb, autotune, trap hi-hats" />
+                    </label>
+                    <label className="kie-wide">Kie Voice / Persona ID
+                      <input value={kiePersonaId} maxLength={200} onChange={(event) => setKiePersonaId(event.target.value)} placeholder="Optional Kie Voice or Persona ID" />
+                      <small>Paste a voice/persona ID created in Kie. This is separate from Dozi&apos;s private My Voice profile.</small>
+                    </label>
+                    {kiePersonaId.trim() && <label>Persona type
+                      <select value={kiePersonaModel} onChange={(event) => setKiePersonaModel(event.target.value as "voice_persona" | "style_persona")}><option value="voice_persona">Voice</option><option value="style_persona">Style</option></select>
+                    </label>}
+                    <label>Style adherence · {kieStyleWeight}%
+                      <input type="range" min="0" max="100" value={kieStyleWeight} onChange={(event) => setKieStyleWeight(Number(event.target.value))} />
+                    </label>
+                    <label>Creative variation · {kieWeirdness}%
+                      <input type="range" min="0" max="100" value={kieWeirdness} onChange={(event) => setKieWeirdness(Number(event.target.value))} />
+                    </label>
+                    {!instrumental && <label>Vocal audio influence · {kieAudioWeight}%
+                      <input type="range" min="0" max="100" value={kieAudioWeight} onChange={(event) => setKieAudioWeight(Number(event.target.value))} />
+                    </label>}
+                    <label>Variation set
+                      <select value={kieVariety} onChange={(event) => setKieVariety(Number(event.target.value))}><option value={0}>Off · exact</option><option value={1}>Normal</option><option value={2}>High</option><option value={3}>Extra</option><option value={4}>Maximum</option></select>
+                    </label>
+                  </fieldset>
+                )}
+                </>
               )}
               {provider.name === "kie" && <p className="creation-help">With automatic lyrics, the provider chooses song length. With your own lyrics or an instrumental, duration is a target.</p>}
               <button
@@ -2012,6 +2240,7 @@ export default function StudioApp() {
                 onClick={generate}
                 disabled={
                   !prompt.trim() ||
+                  (!instrumental && lyricEntryMode === "write" && !lyrics.trim()) ||
                   submitting ||
                   (["elevenlabs", "kie"].includes(provider.name) && !providerPolicyAccepted)
                 }
@@ -2039,8 +2268,9 @@ export default function StudioApp() {
             <section className="results" ref={generationsPanel} aria-label="Generations">
               <div className="results-head">
                 <div>
-                  <h2>Generations</h2>
-                  <span>{songs.length} songs</span>
+                  <small>STUDIO SESSION</small>
+                  <h2>{selectedStudioSessionId ? studioSessions.find((session) => session.id === selectedStudioSessionId)?.title || "Studio Session" : "Unsorted"}</h2>
+                  <span>{sessionSongs.length} songs · generations</span>
                 </div>
                 <div className="results-actions">
                   <button onClick={() => { setCoverSource(null); setCoverSongOpen(true); }}>
@@ -2056,16 +2286,14 @@ export default function StudioApp() {
                 </div>
               </div>
               <div className="result-list">
-                {songs.length === 0 ? (
+                {sessionSongs.length === 0 ? (
                   <div className="empty">
                     <Icon name="spark" />
-                    <h3>Your next sound starts here</h3>
-                    <p>
-                      Describe a song and generate your first durable version.
-                    </p>
+                    <h3>{selectedStudioSessionId ? "This session is ready for its first song" : "Your next sound starts here"}</h3>
+                    <p>{selectedStudioSessionId ? "New generations will be saved to this Studio Session." : "Choose or create a Studio Session to organize new songs, or keep them unsorted."}</p>
                   </div>
                 ) : (
-                  songs.map((s, i) => (
+                  sessionSongs.map((s, i) => (
                     <SongCard
                       key={s.id}
                       song={s}
@@ -2079,6 +2307,14 @@ export default function StudioApp() {
                         setPlaying(false);
                         setRepairSong(song);
                         void loadProfiles();
+                      }}
+                      onCancel={(song) => void cancelGeneration(song)}
+                      cancelling={cancellingGenerationIds.has(s.id)}
+                      onReusePrompt={(song) => {
+                        setPrompt(song.prompt);
+                        setLyricEntryMode("generate");
+                        setView("create");
+                        setNotice(`Restored the brief from “${song.title}”.`);
                       }}
                       onSeek={(p) => playFromSongWaveform(s, p)}
                     />
@@ -2108,6 +2344,24 @@ export default function StudioApp() {
                 <button onClick={() => setSongImportOpen(true)}>
                   Import full song
                 </button>
+                {selectedLibrarySongIds.size > 0 && (
+                  <>
+                    <select aria-label="Move selected songs to Studio Session" value={libraryMoveTarget} disabled={libraryMoveBusy} onChange={(event) => setLibraryMoveTarget(event.target.value)}>
+                      <option value="">Move selected to…</option>
+                      <option value="__unsorted__">Unsorted</option>
+                      {studioSessions.map((session) => <option key={session.id} value={session.id}>{session.title}</option>)}
+                    </select>
+                    <button className="library-move" disabled={!libraryMoveTarget || libraryMoveBusy} onClick={() => void moveSelectedLibrarySongs()}>
+                      {libraryMoveBusy ? "Moving…" : "Move"}
+                    </button>
+                    <button className="library-bulk-archive" onClick={() => setArchiveCandidates(selectedLibrarySongs)}>
+                      {selectedFailedCount === selectedLibrarySongs.length ? "Delete failed" : selectedFailedCount ? "Remove selected" : "Archive selected"} ({selectedLibrarySongIds.size})
+                    </button>
+                    <button className="library-clear-selection" onClick={() => setSelectedLibrarySongIds(new Set())}>
+                      Clear selection
+                    </button>
+                  </>
+                )}
                 <div className="library-view-toggle" role="group" aria-label="Library layout">
                   <button
                     className={libraryView === "grid" ? "active" : ""}
@@ -2133,7 +2387,8 @@ export default function StudioApp() {
                         | "all"
                         | "generated"
                         | "imported"
-                        | "my-voice",
+                        | "my-voice"
+                        | "failed",
                     );
                     setLibraryVisibleCount(24);
                   }}
@@ -2142,6 +2397,7 @@ export default function StudioApp() {
                   <option value="generated">Generated</option>
                   <option value="imported">Imported</option>
                   <option value="my-voice">My Voice</option>
+                  <option value="failed">Failed generations</option>
                 </select>
                 <select
                   aria-label="Sort library"
@@ -2181,11 +2437,16 @@ export default function StudioApp() {
                 </button>
               )}
             </aside>
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The named scroll region needs keyboard focus for arrow-key scrolling. */}
+            <div className="library-song-scroll" role="region" tabIndex={0} aria-label="Library songs">
             {filtered.length ? (
               <>
               <div className={`library-grid ${libraryView === "list" ? "list" : ""}`}>
                 {visibleLibrarySongs.map((s, i) => (
-                  <article key={s.id}>
+                  <article key={s.id} className={s.status === "FAILED" ? "generation-failed" : ""}>
+                    {s.songId && <label className="library-select">
+                      <input type="checkbox" checked={selectedLibrarySongIds.has(s.songId)} onChange={() => toggleLibrarySongSelection(s.songId!)} aria-label={`Select ${s.title}`} />
+                    </label>}
                     <div className="library-cover" data-tone={i % 3}>
                       <button
                         disabled={!s.audioUrl}
@@ -2201,6 +2462,7 @@ export default function StudioApp() {
                       <span>DZ</span>
                     </div>
                     <h3>{s.title}</h3>
+                    {s.status === "FAILED" && <p className="generation-status failed">Failed · {s.errorMessage || "Generation could not be completed."}</p>}
                     <p>
                       {s.genre} · V{s.version}
                     </p>
@@ -2233,9 +2495,9 @@ export default function StudioApp() {
                       {s.songId && (
                         <button
                           className="library-archive"
-                          onClick={() => setArchiveCandidate(s)}
+                          onClick={() => setArchiveCandidates([s])}
                         >
-                          Archive
+                          {s.status === "FAILED" ? "Delete failed" : "Archive"}
                         </button>
                       )}
                     </div>
@@ -2259,6 +2521,7 @@ export default function StudioApp() {
                 <p>Try another search or create your first song.</p>
               </div>
             )}
+            </div>
           </section>
         ) : view === "tracks" ? (
           <section className="tracks-view">
@@ -2678,7 +2941,6 @@ export default function StudioApp() {
         {/* Music is instrumental/generated; captions are not applicable. */}
         <audio
           ref={audio}
-          src={active?.audioUrl}
           onLoadedMetadata={(event) => {
             const start = pendingSongStart.current;
             if (start === null) return;
@@ -2686,8 +2948,8 @@ export default function StudioApp() {
             element.currentTime = Math.min(start, element.duration || start);
             pendingSongStart.current = null;
             setTime(element.currentTime);
-            if (playing) void element.play().catch(() => setPlaying(false));
           }}
+          onPlaying={() => { setPlaybackNotice(""); setPlaying(true); }}
           onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
           onEnded={() => setPlaying(false)}
           onError={() => {
@@ -2708,32 +2970,30 @@ export default function StudioApp() {
         </div>
         <div className="transport">
           <div>
-            <button aria-label="Previous">
+            <button aria-label="Return to start" title="Return to start" disabled={!active} onClick={() => seekMainPlayer(0)}>
               <Icon name="skip" />
             </button>
             <button
               className="main-play"
               aria-label={playing ? "Pause" : "Play"}
-              onClick={() => active && setPlaying((v) => !v)}
+              onClick={() => active && play(active)}
             >
               <Icon name={playing ? "pause" : "play"} />
-            </button>
-            <button aria-label="Next">
-              <Icon name="skip" />
             </button>
           </div>
           {active && (
             <div className="timeline">
               <span>{fmt(time)}</span>
-              <Wave
-                compact
-                data={active.waveform}
-                progress={time / active.duration}
-                onSeek={(p) => {
-                  setTime(p * active.duration);
-                  if (audio.current)
-                    audio.current.currentTime = p * active.duration;
-                }}
+              <input
+                className="playhead-timeline"
+                aria-label="Playback position"
+                aria-valuetext={`${fmt(time)} of ${fmt(active.duration)}`}
+                type="range"
+                min={0}
+                max={active.duration}
+                step={0.1}
+                value={Math.min(time, active.duration)}
+                onChange={(event) => seekMainPlayer(Number(event.target.value))}
               />
               <span>{fmt(active.duration)}</span>
             </div>
@@ -2800,6 +3060,8 @@ export default function StudioApp() {
         <CoverSongModal
           songs={songs}
           profiles={activeVocalProfiles}
+          providerName={provider.name}
+          studioSessionId={selectedStudioSessionId || null}
           initialSource={coverSource}
           onInvite={() => setVocalistPermissionOpen(true)}
           onImportSource={() => {
@@ -2900,7 +3162,7 @@ export default function StudioApp() {
           </section>
         </div>
       )}
-      {archiveCandidate && (
+      {archiveCandidates.length > 0 && (
         <div className="error-modal-backdrop" role="presentation">
           <section
             className="archive-modal"
@@ -2908,18 +3170,17 @@ export default function StudioApp() {
             aria-modal="true"
             aria-labelledby="archive-song-title"
           >
-            <small>ARCHIVE SONG</small>
-            <h2 id="archive-song-title">Archive {archiveCandidate.title}?</h2>
-            <p>
-              This removes the song from your active Library. Its private audio
-              and version history remain preserved and are not deleted.
-            </p>
+            <small>{failedRemovalCount ? "REMOVE SONGS" : "ARCHIVE SONGS"}</small>
+            <h2 id="archive-song-title">{failedRemovalCount === archiveCandidates.length ? "Delete" : failedRemovalCount ? "Remove" : "Archive"} {archiveCandidates.length === 1 ? archiveCandidates[0].title : `${archiveCandidates.length} songs`}?</h2>
+            {failedRemovalCount > 0 && <p>{failedRemovalCount} failed {failedRemovalCount === 1 ? "song will" : "songs will"} be permanently deleted now. This cannot be undone. Songs with saved versions are protected.</p>}
+            {failedRemovalCount < archiveCandidates.length && <p>Archived songs leave your active Library. Their private audio and version history are kept for 30 days, then permanently purged. Audio still used by another song or saved voice is kept while it is needed.</p>}
+            {libraryNotice && <p role="status">{libraryNotice}</p>}
             <div>
-              <button disabled={archiveBusy} onClick={() => setArchiveCandidate(null)}>
-                Keep song
+              <button disabled={archiveBusy} onClick={() => setArchiveCandidates([])}>
+                Keep {archiveCandidates.length === 1 ? "song" : "songs"}
               </button>
-              <button disabled={archiveBusy} onClick={() => void archiveLibrarySong()}>
-                {archiveBusy ? "Archiving…" : "Archive song"}
+              <button disabled={archiveBusy} onClick={() => void archiveLibrarySongs()}>
+                {archiveBusy ? "Removing…" : failedRemovalCount === archiveCandidates.length ? "Delete permanently" : failedRemovalCount ? "Delete failed & archive others" : `Archive ${archiveCandidates.length === 1 ? "song" : "songs"}`}
               </button>
             </div>
           </section>
@@ -3323,6 +3584,8 @@ function VocalistPermissionModal({
 function CoverSongModal({
   songs,
   profiles,
+  providerName,
+  studioSessionId,
   initialSource,
   onInvite,
   onImportSource,
@@ -3331,6 +3594,8 @@ function CoverSongModal({
 }: {
   songs: Song[];
   profiles: VocalProfile[];
+  providerName?: string;
+  studioSessionId: string | null;
   initialSource: Song | null;
   onInvite: () => void;
   onImportSource: () => void;
@@ -3345,8 +3610,14 @@ function CoverSongModal({
     // deliberately opts into ACE-Step's less predictable re-imagining route.
     [sourceAdherence, setSourceAdherence] = useState(100),
     [styleInfluence, setStyleInfluence] = useState(0),
+    [coverVocalGender, setCoverVocalGender] = useState<VocalGender>("auto"),
+    [coverNegativeTags, setCoverNegativeTags] = useState(""),
+    [coverPersonaId, setCoverPersonaId] = useState(""),
+    [coverPersonaModel, setCoverPersonaModel] = useState<"voice_persona" | "style_persona">("voice_persona"),
+    [coverWeirdness, setCoverWeirdness] = useState(0),
+    [coverVariety, setCoverVariety] = useState(1),
     [vocalProfileId, setVocalProfileId] = useState(""),
-    [voiceIdentityStrength, setVoiceIdentityStrength] = useState(100),
+    [voiceIdentityStrength, setVoiceIdentityStrength] = useState(70),
     [lyricsSaving, setLyricsSaving] = useState(false),
     [lyricsNotice, setLyricsNotice] = useState(""),
     [title, setTitle] = useState(initialSource ? `${initialSource.title} · Cover` : ""),
@@ -3429,15 +3700,28 @@ function CoverSongModal({
             lyrics,
             instrumental: false,
             genre: source.genre,
+            vocalGender: coverVocalGender,
             bpm: source.bpm,
             key: source.musicalKey.split(" ")[0],
             scale: source.musicalKey.toLowerCase().includes("major")
               ? "major"
               : "minor",
             durationSeconds: Math.max(3, Math.min(600, Math.round(source.duration))),
+            studioSessionId,
             providerPolicyAccepted: rightsAttested,
             vocalProfileId: usePrivateVoice ? vocalProfileId : null,
-            providerOptions: { voiceIdentityStrength },
+            providerOptions: {
+              voiceIdentityStrength,
+              ...(providerName === "kie" ? {
+                negativeTags: coverNegativeTags,
+                personaId: coverPersonaId,
+                personaModel: coverPersonaModel,
+                audioWeight: sourceAdherence,
+                styleWeight: styleInfluence,
+                weirdnessConstraint: coverWeirdness,
+                variety: coverVariety,
+              } : {}),
+            },
             vocalCast: cleanVocalCast(lyrics, vocalCast),
             cover: {
               sourceSongId: source.songId,
@@ -3579,7 +3863,7 @@ function CoverSongModal({
                 disabled={busy}
                 onChange={(event) => setVoiceIdentityStrength(Number(event.target.value))}
               />
-              <small>0% keeps the generated vocalist. 100% applies the selected private voice as fully as the current vocal conversion can.</small>
+              <small>70% is the recommended balance: it keeps the source timing while reducing conversion artifacts. Raise it only if you need a stronger identity match.</small>
             </label>
           )}
           <label>
@@ -3602,7 +3886,7 @@ function CoverSongModal({
           }}>{lyricsSaving ? "Saving lyrics…" : "Save lyrics to song"}</button>
           {lyricsNotice && <p role="status">{lyricsNotice}</p>}
           <details className="cover-advanced">
-            <summary>Style, title, and vocal cast</summary>
+            <summary>Style, title, vocal cast, and provider controls</summary>
           <label>
             COVER TITLE
             <input
@@ -3630,6 +3914,28 @@ function CoverSongModal({
               onChange={setVocalCast}
               onInvite={onInvite}
             />
+            {providerName === "kie" && <fieldset className="kie-controls cover-kie-controls">
+              <legend>Suno controls via Kie</legend>
+              <p>Original arrangement maps to Audio Influence; Style Influence maps to Kie&apos;s style weight.</p>
+              <label>Vocal gender
+                <select value={coverVocalGender} disabled={busy} onChange={(event) => setCoverVocalGender(event.target.value as VocalGender)}><option value="auto">Auto</option><option value="male">Male</option><option value="female">Female</option></select>
+              </label>
+              <label>Creative variation · {coverWeirdness}%
+                <input type="range" min="0" max="100" value={coverWeirdness} disabled={busy} onChange={(event) => setCoverWeirdness(Number(event.target.value))} />
+              </label>
+              <label>Variation set
+                <select value={coverVariety} disabled={busy} onChange={(event) => setCoverVariety(Number(event.target.value))}><option value={0}>Off · exact</option><option value={1}>Normal</option><option value={2}>High</option><option value={3}>Extra</option><option value={4}>Maximum</option></select>
+              </label>
+              <label>Exclude traits
+                <input value={coverNegativeTags} maxLength={500} disabled={busy} onChange={(event) => setCoverNegativeTags(event.target.value)} placeholder="For example: heavy reverb, original West Coast sound" />
+              </label>
+              <label className="kie-wide">Kie Voice / Persona ID
+                <input value={coverPersonaId} maxLength={200} disabled={busy} onChange={(event) => setCoverPersonaId(event.target.value)} placeholder="Optional Kie Voice or Persona ID" />
+              </label>
+              {coverPersonaId.trim() && <label>Persona type
+                <select value={coverPersonaModel} disabled={busy} onChange={(event) => setCoverPersonaModel(event.target.value as "voice_persona" | "style_persona")}><option value="voice_persona">Voice</option><option value="style_persona">Style</option></select>
+              </label>}
+            </fieldset>}
           </>
           </details>
           <p className="cover-rights-notice">
@@ -5366,6 +5672,7 @@ function MultitrackWorkspace({
             />
           ) : null,
         )}
+        <div className="mixer-playback-buttons">
         <button
           className="mixer-play"
           aria-label={playing ? "Pause all tracks" : "Play all tracks"}
@@ -5374,6 +5681,8 @@ function MultitrackWorkspace({
         >
           <Icon name={playing ? "pause" : "play"} />
         </button>
+        <button className="mixer-seek" aria-label="Return to start" onClick={() => void seek(0)}>↤</button>
+        </div>
         <span>{formatTime(position)}</span>
         <input
           aria-label="Song position"
@@ -5747,6 +6056,9 @@ function SongCard({
   onPlay,
   onOpen,
   onRepair,
+  onCancel,
+  cancelling,
+  onReusePrompt,
   onSeek,
 }: {
   song: Song;
@@ -5757,6 +6069,9 @@ function SongCard({
   onPlay: (s: Song) => void;
   onOpen: (s: Song) => void;
   onRepair: (s: Song) => void;
+  onCancel: (s: Song) => void;
+  cancelling: boolean;
+  onReusePrompt: (s: Song) => void;
   onSeek: (p: number) => void;
 }) {
   const fmt = (n: number) =>
@@ -5765,7 +6080,7 @@ function SongCard({
         .padStart(2, "0")}`,
     extension = s.vocalist ? "wav" : s.provider === "elevenlabs" ? "mp3" : "wav";
   return (
-    <article className="song-card">
+    <article className={`song-card ${s.status === "FAILED" ? "generation-failed" : ""}`}>
       <div className="cover" data-tone={tone}>
         <span>{s.status === "COMPLETE" ? "DZ" : s.progress + "%"}</span>
       </div>
@@ -5779,6 +6094,7 @@ function SongCard({
             {s.vocalist && <p className="song-vocalist">{s.vocalist}</p>}
           </div>
           <div className="song-actions">
+            {s.status === "FAILED" && <span className="generation-status failed">Failed</span>}
             {s.audioUrl && (
               <a
                 href={s.audioUrl}
@@ -5833,6 +6149,9 @@ function SongCard({
           >
             Open tracks
           </button>
+          <button className="remix" onClick={() => onReusePrompt(s)}>
+            Reuse prompt
+          </button>
           <button
             className="remix"
             disabled={s.status !== "COMPLETE" || !s.audioUrl}
@@ -5840,6 +6159,11 @@ function SongCard({
           >
             Repair vocal
           </button>
+          {!['COMPLETE', 'FAILED', 'CANCELLED'].includes(s.status) && (
+            <button className="cancel-generation" disabled={cancelling} onClick={() => onCancel(s)}>
+              {cancelling ? "Cancelling…" : "Cancel"}
+            </button>
+          )}
         </div>
       </div>
     </article>

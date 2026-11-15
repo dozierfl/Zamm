@@ -679,14 +679,18 @@ test("the library filters generated, imported, and private-voice songs", async (
   assert.match(studio, /song\.provider === "user-upload"/);
   assert.match(studio, /Boolean\(song\.vocalist\)/);
 });
-test("library archiving is confirmed, owner-scoped, and non-destructive", async () => {
+test("library removal is confirmed, owner-scoped, and explains retention", async () => {
   const [studio, listRoute, songRoute] = await Promise.all([
     readFile(new URL("../app/studio-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/generations/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/songs/[id]/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(studio, /Archive song/);
-  assert.match(studio, /Its private audio[\s\S]*not deleted/);
+  assert.match(studio, /Archive selected/);
+  assert.match(studio, /archiveCandidates\.length > 0/);
+  assert.match(studio, /aria-labelledby="archive-song-title"/);
+  assert.match(studio, /onClick=\{\(\) => void archiveLibrarySongs\(\)\}/);
+  assert.match(studio, /kept for 30 days, then permanently purged/);
+  assert.match(studio, /Delete permanently/);
   assert.match(studio, /method: "DELETE"/);
   assert.match(listRoute, /s\.archived_at is null/);
   assert.match(songRoute, /update songs set archived_at=now\(\)/);
@@ -914,6 +918,8 @@ test("Kie.ai uploads private source audio before starting a cover", async () => 
     const result=await new KieMusicProvider("secret-key","V6","https://api.kie.test","https://upload.kie.test",0).generateCover!({jobId:"j",userId:"u",songId:"s",versionId:"v",compositionPlan:plan,lyrics:"Sing it again",seed:42,outputMode:"MASTER_ONLY"},{sourceAssetId:"asset-1",sourceTitle:"Owned song",sourceAudio:new Uint8Array([82,73,70,70]),sourceMimeType:"audio/wav",sourceDurationSeconds:42,arrangement:"REFRESH",sourceAdherence:82,styleInfluence:55});
     const taskBody=JSON.parse(String(calls[1].init?.body));
     assert.equal(taskBody.model,"ai-music-api/upload-and-cover-audio");
+    assert.equal(taskBody.input.audio_weight,0.82);
+    assert.equal(taskBody.input.style_weight,0.55);
     assert.equal(taskBody.input.upload_url,"https://private-upload.example/source.wav");
     assert.equal(result.assets[0].sourceAssetId,"asset-1");
   }finally{globalThis.fetch=original}

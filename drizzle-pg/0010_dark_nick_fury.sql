@@ -1,0 +1,1 @@
+ALTER TABLE "audio_deletion_jobs" ADD COLUMN "generation_job_id" uuid;
